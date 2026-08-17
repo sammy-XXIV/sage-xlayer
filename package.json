@@ -1,0 +1,29 @@
+{
+  "name": "xtrade-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-custodial conversational trading agent on X Layer (BuildX AI Season Hackathon)",
+  "type": "commonjs",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network xlayerTestnet",
+    "deploy:mainnet": "hardhat run scripts/deploy.js --network xlayerMainnet",
+    "create-vault:testnet": "hardhat run scripts/createVault.js --network xlayerTestnet",
+    "create-vault:mainnet": "hardhat run scripts/createVault.js --network xlayerMainnet",
+    "bot": "node bot/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@openzeppelin/contracts": "^5.1.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1",
+    "node-cron": "^3.0.3",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.15"
+  }
+}
