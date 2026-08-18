@@ -45,6 +45,7 @@ describe("TradeVault", function () {
     it("lets the owner revoke the agent, and the old agent loses access", async function () {
       const { vault, ownerSigner, agentSigner, usdt, weth, router } = await deployFixture();
       await vault.connect(ownerSigner).setRouter(await router.getAddress());
+      await vault.connect(ownerSigner).setSpender(await router.getAddress());
       await vault.connect(ownerSigner).setTokenIn(await usdt.getAddress(), true, ethers.parseUnits("100", 18), ethers.parseUnits("500", 18));
       await vault.connect(ownerSigner).setTokenOut(await weth.getAddress(), true);
 
@@ -93,6 +94,7 @@ describe("TradeVault", function () {
     async function configuredVault() {
       const ctx = await deployFixture();
       await ctx.vault.connect(ctx.ownerSigner).setRouter(await ctx.router.getAddress());
+      await ctx.vault.connect(ctx.ownerSigner).setSpender(await ctx.router.getAddress());
       await ctx.vault
         .connect(ctx.ownerSigner)
         .setTokenIn(await ctx.usdt.getAddress(), true, ethers.parseUnits("100", 18), ethers.parseUnits("150", 18));
@@ -135,9 +137,27 @@ describe("TradeVault", function () {
       ).to.be.revertedWith("TradeVault: router not set");
     });
 
+    it("blocks trades when router is set but spender is not", async function () {
+      const { vault, ownerSigner, agentSigner, usdt, weth, router } = await deployFixture();
+      await vault.connect(ownerSigner).setRouter(await router.getAddress());
+      // note: setSpender never called
+      const swapCalldata = router.interface.encodeFunctionData("swap", [
+        await usdt.getAddress(),
+        await weth.getAddress(),
+        ethers.parseUnits("10", 18),
+        ethers.parseUnits("1", 18),
+      ]);
+      await expect(
+        vault
+          .connect(agentSigner)
+          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 0, swapCalldata)
+      ).to.be.revertedWith("TradeVault: spender not set");
+    });
+
     it("rejects a tokenOut that isn't allowlisted even if tokenIn is", async function () {
       const { vault, ownerSigner, agentSigner, usdt, weth, router } = await deployFixture();
       await vault.connect(ownerSigner).setRouter(await router.getAddress());
+      await vault.connect(ownerSigner).setSpender(await router.getAddress());
       await vault
         .connect(ownerSigner)
         .setTokenIn(await usdt.getAddress(), true, ethers.parseUnits("100", 18), ethers.parseUnits("150", 18));

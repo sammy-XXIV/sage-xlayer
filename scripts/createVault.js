@@ -37,7 +37,7 @@ async function main() {
 
   console.log(`Vault created: ${vaultAddress} (owner: ${signer.address}, agent: ${agent})`);
   console.log(`tx: ${receipt.hash}`);
-  console.log(`Next: set a router (vault.setRouter) and allowlist tokens (setTokenIn / setTokenOut) as the owner before the agent can trade.`);
+  console.log(`Next: set a router (vault.setRouter), a spender (vault.setSpender — NOT the same address as router, see contracts/TradeVault.sol), and allowlist tokens (setTokenIn / setTokenOut) as the owner before the agent can trade.`);
   console.log(`Then link it to the bot: send "/link ${signer.address}" to the Telegram bot.`);
 }
 

@@ -12,6 +12,13 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 ///         else. The agent can never withdraw funds or change the router / token
 ///         allowlists; only the owner can. This is what makes custody stay with
 ///         the user even though a bot is trading on their behalf.
+/// @dev Router vs. spender: aggregators like OKX DEX use two different
+///      addresses — a "router" that the swap transaction is sent to (tx.to),
+///      and a separate "approval"/"spender" contract that actually holds the
+///      ERC20 allowance and pulls funds. These are NOT the same address (see
+///      OKX's dex-smart-contract and dex-swap docs: `tx.to` vs.
+///      `signatureData[].approveContract` / `dexTokenApproveAddress`). Approving
+///      the wrong one means the swap call will simply fail to pull funds.
 contract TradeVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -23,7 +30,8 @@ contract TradeVault is ReentrancyGuard {
 
     address public immutable owner;
     address public agent;
-    address public router; // must be explicitly set by the owner; zero by default
+    address public router; // call target (tx.to) for the swap; must be explicitly set by the owner
+    address public spender; // address granted the ERC20 allowance; may differ from router — see contract-level note
 
     mapping(address => TokenLimits) public tokenIn; // asset the agent is allowed to spend
     mapping(address => bool) public tokenOut; // asset the agent is allowed to buy
@@ -34,6 +42,7 @@ contract TradeVault is ReentrancyGuard {
     event Withdrawn(address indexed token, uint256 amount, address indexed to);
     event AgentUpdated(address indexed agent);
     event RouterUpdated(address indexed router);
+    event SpenderUpdated(address indexed spender);
     event TokenInUpdated(address indexed token, bool allowed, uint256 perTradeCap, uint256 perDayCap);
     event TokenOutUpdated(address indexed token, bool allowed);
     event TradeExecuted(
@@ -71,6 +80,11 @@ contract TradeVault is ReentrancyGuard {
         emit RouterUpdated(newRouter);
     }
 
+    function setSpender(address newSpender) external onlyOwner {
+        spender = newSpender;
+        emit SpenderUpdated(newSpender);
+    }
+
     function setTokenIn(
         address token,
         bool allowed,
@@ -100,9 +114,10 @@ contract TradeVault is ReentrancyGuard {
 
     // ---------- agent execution ----------
 
-    /// @param swapCalldata pre-built calldata for `router`, prepared off-chain (e.g. an
-    ///        OKX DEX swap quote turned into a tx). The router pulls `amountIn` of
-    ///        `tokenIn_` from this vault via the allowance granted just below.
+    /// @param swapCalldata pre-built calldata for `router` (tx.to from the OKX
+    ///        swap quote), prepared off-chain. `spender` is granted the ERC20
+    ///        allowance and is what actually pulls `amountIn` of `tokenIn_` —
+    ///        it is commonly a different address than `router`.
     function executeTrade(
         address tokenIn_,
         address tokenOut_,
@@ -111,6 +126,7 @@ contract TradeVault is ReentrancyGuard {
         bytes calldata swapCalldata
     ) external onlyAgent nonReentrant returns (uint256 amountOut) {
         require(router != address(0), "TradeVault: router not set");
+        require(spender != address(0), "TradeVault: spender not set");
 
         TokenLimits memory limits = tokenIn[tokenIn_];
         require(limits.allowed, "TradeVault: tokenIn not allowed");
@@ -129,10 +145,10 @@ contract TradeVault is ReentrancyGuard {
 
         uint256 balBefore = tokenOutErc20.balanceOf(address(this));
 
-        tokenInErc20.forceApprove(router, amountIn);
+        tokenInErc20.forceApprove(spender, amountIn);
         (bool ok, ) = router.call(swapCalldata);
         require(ok, "TradeVault: swap call failed");
-        tokenInErc20.forceApprove(router, 0);
+        tokenInErc20.forceApprove(spender, 0);
 
         amountOut = tokenOutErc20.balanceOf(address(this)) - balBefore;
         require(amountOut >= minAmountOut, "TradeVault: slippage");

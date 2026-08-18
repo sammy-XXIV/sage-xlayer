@@ -47,7 +47,12 @@ function getVault(vaultAddress, signerOrProvider = getProvider()) {
 
 async function readVaultState(vaultAddress, tokens) {
   const vault = getVault(vaultAddress);
-  const [owner, agent, router] = await Promise.all([vault.owner(), vault.agent(), vault.router()]);
+  const [owner, agent, router, spender] = await Promise.all([
+    vault.owner(),
+    vault.agent(),
+    vault.router(),
+    vault.spender(),
+  ]);
   const balances = {};
   const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
   const provider = getProvider();
@@ -56,13 +61,35 @@ async function readVaultState(vaultAddress, tokens) {
     const [bal, decimals] = await Promise.all([token.balanceOf(vaultAddress), token.decimals()]);
     balances[symbol] = ethers.formatUnits(bal, decimals);
   }
-  return { owner, agent, router, balances };
+  return { owner, agent, router, spender, balances };
 }
 
-/// Executes a trade using the agent's session key. swap must be the object
-/// returned by okxDex.buildSwap() — { to, data } — repackaged as
-/// TradeVault's swapCalldata argument (raw calldata to `router`).
-async function executeTrade({ vaultAddress, tokenIn, tokenOut, amountIn, minAmountOut, swapCalldata }) {
+/// Executes a trade using the agent's session key. `expectedRouter` /
+/// `expectedSpender` should be the router/spender OKX's live swap response
+/// just returned (okxDex.buildSwap's `.router` / `.spender`). TradeVault's
+/// executeTrade always calls whatever router/spender the owner configured
+/// on-chain — it does NOT take them as call arguments — so if OKX has
+/// rotated either address since the owner last called setRouter/setSpender,
+/// blindly firing would send freshly-built calldata at a stale contract.
+/// This checks the two match before submitting, and fails loudly (asking the
+/// owner to re-run setRouter/setSpender) instead of risking a bad call.
+async function executeTrade({ vaultAddress, tokenIn, tokenOut, amountIn, minAmountOut, swapCalldata, expectedRouter, expectedSpender }) {
+  const vaultRead = getVault(vaultAddress);
+  const [onChainRouter, onChainSpender] = await Promise.all([vaultRead.router(), vaultRead.spender()]);
+
+  if (expectedRouter && onChainRouter.toLowerCase() !== expectedRouter.toLowerCase()) {
+    throw new Error(
+      `Vault's on-chain router (${onChainRouter}) doesn't match OKX's current router (${expectedRouter}). ` +
+        `The owner needs to call setRouter(${expectedRouter}) before this trade can execute.`
+    );
+  }
+  if (expectedSpender && onChainSpender.toLowerCase() !== expectedSpender.toLowerCase()) {
+    throw new Error(
+      `Vault's on-chain spender (${onChainSpender}) doesn't match OKX's current spender (${expectedSpender}). ` +
+        `The owner needs to call setSpender(${expectedSpender}) before this trade can execute.`
+    );
+  }
+
   const agentSigner = getAgentSigner();
   const vault = getVault(vaultAddress, agentSigner);
   const tx = await vault.executeTrade(tokenIn, tokenOut, amountIn, minAmountOut, swapCalldata);

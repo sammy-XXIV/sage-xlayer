@@ -12,6 +12,11 @@ const vaultChain = require("./tools/vaultChain");
 const { checkTokenSafety } = require("./tools/safety");
 const rules = require("./tools/rules");
 
+// OKX's DEX aggregator only lists X Layer mainnet (196), not testnet (1952) —
+// testnets generally don't have real liquidity for an aggregator to route
+// through. get_quote/execute_trade will throw a clear error against 1952.
+// Set CHAIN_ID=196 once trading for real; use 1952 only for vault/contract
+// testing against a local mock router.
 const CHAIN_ID = Number(process.env.CHAIN_ID || 1952);
 
 const SYSTEM_PROMPT = `You are xtrade-agent, a self-custodial conversational trading agent on X Layer.
@@ -138,7 +143,7 @@ async function runTool(name, input, telegramId) {
         fromTokenAddress: tokenInAddr,
         toTokenAddress: tokenOutAddr,
         amount: input.amountIn,
-        slippage: "0.01",
+        slippagePercent: "1",
         userWalletAddress: user.vaultAddress,
       });
       const result = await vaultChain.executeTrade({
@@ -146,8 +151,10 @@ async function runTool(name, input, telegramId) {
         tokenIn: tokenInAddr,
         tokenOut: tokenOutAddr,
         amountIn: input.amountIn,
-        minAmountOut: swap.minAmountOut || 0,
+        minAmountOut: swap.minReceiveAmount || 0,
         swapCalldata: swap.data,
+        expectedRouter: swap.router,
+        expectedSpender: swap.spender,
       });
       store.recordTrade({
         telegramId,

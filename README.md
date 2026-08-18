@@ -9,8 +9,9 @@ You talk to a Telegram bot in plain language — "buy $50 of ETH", "DCA $20 into
 ## Custody model
 
 - Your own wallet deploys and owns your `TradeVault` — there is no custodial phase, ever. You run `npm run create-vault:testnet` yourself, with your own key.
-- You then grant the bot's signer a session-key role via `vault.setAgent(...)`. That key can only call `executeTrade`, only through the router you set, only on tokens you've allowlisted, and only within per-trade / per-day caps you set — all enforced on-chain, not by the bot.
+- You then grant the bot's signer a session-key role via `vault.setAgent(...)`. That key can only call `executeTrade`, only through the router/spender you set, only on tokens you've allowlisted, and only within per-trade / per-day caps you set — all enforced on-chain, not by the bot.
 - The session key has no path to `withdraw` or touch the allowlists. You can revoke it (`setAgent(0x0)`) at any time.
+- **Router vs. spender**: DEX aggregators (OKX included) use two different addresses — `router` is who the swap transaction is sent to, `spender` is who actually holds the ERC20 allowance and pulls funds. They're commonly different contracts. The vault tracks both separately (`setRouter` / `setSpender`) — approving the wrong one just means the swap fails to pull funds, so this distinction is load-bearing, not cosmetic.
 
 ## AI features
 
@@ -33,16 +34,25 @@ You talk to a Telegram bot in plain language — "buy $50 of ETH", "DCA $20 into
 ## Contracts
 
 - `TradeVaultFactory.sol` — one call, `createVault(agent)`, deploys a vault owned by `msg.sender`.
-- `TradeVault.sol` — per-user vault: owner controls (`setAgent`, `setRouter`, `setTokenIn`/`setTokenOut` with per-trade/per-day caps, `withdraw`), agent can only call `executeTrade` within those bounds.
-- 13 passing tests (`npm test`) covering ownership, agent revocation, cap enforcement (per-trade, rolling per-day), tokenIn/tokenOut allowlisting, slippage protection, and router-call failure handling.
+- `TradeVault.sol` — per-user vault: owner controls (`setAgent`, `setRouter`, `setSpender`, `setTokenIn`/`setTokenOut` with per-trade/per-day caps, `withdraw`), agent can only call `executeTrade` within those bounds.
+- 14 passing tests (`npm test`) covering ownership, agent revocation, cap enforcement (per-trade, rolling per-day), tokenIn/tokenOut allowlisting, slippage protection, router-call failure handling, and the spender-not-set guard. Verified end-to-end (not just unit tests) against a live local Hardhat node: deploy → user creates their own vault → owner configures it → agent executes a trade → balances update correctly.
+
+## OKX DEX integration — verified against the live docs (2026-08-18)
+
+- Endpoint is `/api/v6/dex/aggregator/swap` (not v5), response is array-wrapped (`data[0].routerResult`, `data[0].tx`).
+- `tx.to` (the router) and `signatureData[0].approveContract` (the spender) are genuinely different addresses — confirmed the router-vs-spender split above wasn't over-engineering.
+- OKX's own docs warn both addresses **can change with contract upgrades** and recommend always using the live API response rather than a hardcoded value. `bot/tools/vaultChain.js::executeTrade` checks the vault's on-chain `router`/`spender` against what OKX's live response just returned before submitting, and fails loudly (asking the owner to re-run `setRouter`/`setSpender`) rather than risking a stale call.
+- Static reference addresses for X Layer from the docs table (cross-check, don't hardcode): DEX router `0x7c5bee2a8091c3ef39072f64f18fac913060aeaf`, token approval contract `0x8b773D83bc66Be128c60e07E17C8901f7a64F000`.
+- **The aggregator's supported-chains table only lists "X Layer" (mainnet, chainIndex assumed `196`) — no separate testnet entry.** Testnets generally don't have real liquidity for an aggregator to route through, so `get_quote`/`execute_trade` are expected to work on mainnet only; `bot/tools/okxDex.js` will throw a clear error if called with `CHAIN_ID=1952`. For a testnet demo, use `contracts/test-helpers/MockRouter.sol` instead — see the integration pattern in `test/TradeVault.test.js`.
+- The `196` chainIndex assumption (matching X Layer's real EVM chain ID, same pattern as Ethereum's chainIndex `1`) is not independently confirmed against a live authenticated API call — verify with real OKX API credentials before trusting it.
 
 ## Known gaps / TODO before real funds touch this
 
-- **OKX DEX router address and API endpoints are unverified.** `bot/tools/okxDex.js` and the `TradeVault.router` value both need to be checked against the live OKX Web3 DEX docs — this environment couldn't reach `web3.okx.com` to confirm them. Do this before any mainnet use.
-- **`config/tokens.json` is empty.** Fill in verified token addresses for X Layer testnet/mainnet before running the bot — do not guess.
+- **`config/tokens.json` is empty.** Fill in verified token addresses for X Layer mainnet before running the bot for real — do not guess.
 - **GoPlus's chain ID for X Layer is assumed, not confirmed** (`bot/tools/safety.js`) — verify or treat "unsupported" responses as "unknown," not "safe."
 - **`/link` doesn't verify wallet ownership** — it trusts whatever address you send it, checked only for having a vault on-chain. Fine for a testnet demo, not for anything real without a signature-based auth step.
-- No frontend yet — vault creation and configuration (`setRouter`, allowlists, caps) are all done via Hardhat scripts/console for now.
+- No frontend yet — vault creation and configuration (`setRouter`, `setSpender`, allowlists, caps) are all done via Hardhat scripts/console for now.
+- Real OKX-routed trades only work once you're pointed at mainnet (`CHAIN_ID=196`) with funded API credentials — see the OKX integration note above.
 
 ## Setup
 

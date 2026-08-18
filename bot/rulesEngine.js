@@ -10,6 +10,8 @@ const okxDex = require("./tools/okxDex");
 const vaultChain = require("./tools/vaultChain");
 
 const SCHEDULE_INTERVAL_MS = { daily: 24 * 60 * 60 * 1000, weekly: 7 * 24 * 60 * 60 * 1000 };
+// See the CHAIN_ID note in agent.js — OKX's DEX aggregator is expected to
+// only support X Layer mainnet (196), not testnet (1952).
 const CHAIN_ID = Number(process.env.CHAIN_ID || 1952);
 
 async function currentPrice(tokenSymbol, quoteSymbol = "USDT") {
@@ -30,7 +32,7 @@ async function fireTrade(rule, bot) {
     fromTokenAddress: tokenInAddr,
     toTokenAddress: tokenOutAddr,
     amount: rule.amountIn,
-    slippage: "0.01",
+    slippagePercent: "1",
     userWalletAddress: rule.vaultAddress,
   });
 
@@ -39,8 +41,10 @@ async function fireTrade(rule, bot) {
     tokenIn: tokenInAddr,
     tokenOut: tokenOutAddr,
     amountIn: rule.amountIn,
-    minAmountOut: swap.minAmountOut || 0,
+    minAmountOut: swap.minReceiveAmount || 0,
     swapCalldata: swap.data,
+    expectedRouter: swap.router,
+    expectedSpender: swap.spender,
   });
 
   store.recordTrade({
