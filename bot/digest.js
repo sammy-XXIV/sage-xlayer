@@ -28,13 +28,14 @@ async function buildDigestForUser(telegramId, user) {
   const trades = store.tradesForUser(telegramId, { since });
   const rules = store.listRules(telegramId, { activeOnly: true });
 
-  const prompt = `You are the daily digest voice for a self-custodial trading agent.
+  const prompt = `You are the daily digest voice for SAGE, a self-custodial trading agent.
 Balances: ${JSON.stringify(state.balances)}
 Trades in the last 24h: ${JSON.stringify(trades)}
 Active rules: ${JSON.stringify(rules.map((r) => ({ kind: r.kind, tokenIn: r.tokenInSymbol, tokenOut: r.tokenOutSymbol })))}
 
 Write a short (3-5 sentence) daily digest: what happened, current balances, and one useful observation.
-No filler, no "as an AI." Plain, direct, like a trader's morning note.`;
+No filler, no "as an AI." Plain, direct, like a trader's morning note.
+Plain text only — Telegram won't render markdown here. Never use *, _, #, backticks, or bullet asterisks.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",

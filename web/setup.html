@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAGE — Vault Setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #131313;
+    --border: #2a2a2a;
+    --border-active: #e8e8e8;
+    --text: #eaeaea;
+    --dim: #8a8a8a;
+    --accent: #7dffb3;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    letter-spacing: -0.02em;
+  }
+  .sub { color: var(--dim); font-size: 14px; margin: 0 0 32px; }
+  .card {
+    background: var(--panel);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--dim);
+  }
+  .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .row:last-child { margin-bottom: 0; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  input {
+    background: #000;
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    flex: 1;
+    min-width: 120px;
+  }
+  input:focus { outline: none; border-color: var(--border-active); }
+  button {
+    background: var(--accent);
+    color: #000;
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 2px solid var(--border);
+  }
+  button.secondary:hover { border-color: var(--border-active); }
+  .field { flex: 1; min-width: 140px; }
+  .status {
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    margin-top: 10px;
+    word-break: break-all;
+  }
+  .status.ok { border-color: var(--accent); color: var(--accent); }
+  .status.err { border-color: var(--danger); color: var(--danger); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
+  .kv dt { color: var(--dim); }
+  .kv dd { margin: 0; word-break: break-all; }
+  code {
+    background: #000;
+    border: 2px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 13px;
+  }
+  .hidden { display: none !important; }
+  .hint { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .copybox {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: #000;
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .copybox code { border: none; background: none; padding: 0; flex: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SAGE — Vault Setup</h1>
+  <p class="sub">This runs entirely from your own wallet. Nothing here ever touches a server — every action below is a transaction you sign yourself.</p>
+
+  <div class="card">
+    <h2>1. Connect</h2>
+    <div id="connectRow" class="row">
+      <button id="connectBtn">Connect Wallet</button>
+      <span id="connectedAddr" class="hidden hint"></span>
+    </div>
+    <div id="networkStatus" class="status hidden"></div>
+  </div>
+
+  <div id="vaultSection" class="hidden">
+    <div class="card">
+      <h2>2. Your Vault</h2>
+      <div id="noVault">
+        <p class="hint">No vault found for this address yet. Creating one makes you the permanent owner — SAGE only ever gets the capped session key you grant below.</p>
+        <button id="createVaultBtn">Create Vault</button>
+      </div>
+      <div id="hasVault" class="hidden">
+        <dl class="kv">
+          <dt>Vault</dt><dd id="vaultAddr"></dd>
+          <dt>Owner</dt><dd id="vaultOwner"></dd>
+          <dt>Agent</dt><dd id="vaultAgent"></dd>
+          <dt>Router</dt><dd id="vaultRouter"></dd>
+          <dt>Spender</dt><dd id="vaultSpender"></dd>
+        </dl>
+      </div>
+      <div id="createStatus" class="status hidden"></div>
+    </div>
+
+    <div id="configCard" class="card hidden">
+      <h2>3. Configure</h2>
+
+      <label>Agent (SAGE's session key — only this address can trade)</label>
+      <div class="row">
+        <input id="agentInput" class="field" placeholder="0x..." />
+        <button id="setAgentBtn" class="secondary">Set Agent</button>
+      </div>
+
+      <label style="margin-top:14px">Router (swap call target)</label>
+      <div class="row">
+        <input id="routerInput" class="field" placeholder="0x..." />
+        <button id="setRouterBtn" class="secondary">Set Router</button>
+      </div>
+
+      <label style="margin-top:14px">Spender (gets the ERC20 allowance — usually NOT the same as router)</label>
+      <div class="row">
+        <input id="spenderInput" class="field" placeholder="0x..." />
+        <button id="setSpenderBtn" class="secondary">Set Spender</button>
+      </div>
+
+      <div class="hint" style="margin-top:10px">Router/spender addresses can rotate — verify against OKX's live docs before mainnet use. Prefilled with X Layer's last-known values for testnet convenience only.</div>
+      <div id="configStatus" class="status hidden"></div>
+    </div>
+
+    <div id="allowlistCard" class="card hidden">
+      <h2>4. Allowlist a Spend Token (tokenIn)</h2>
+      <div class="row">
+        <div class="field"><label>Token address</label><input id="tokenInAddr" placeholder="0x..." /></div>
+        <div class="field"><label>Per-trade cap (raw units)</label><input id="perTradeCap" placeholder="e.g. 100000000000000000000" /></div>
+        <div class="field"><label>Per-day cap (raw units)</label><input id="perDayCap" placeholder="e.g. 500000000000000000000" /></div>
+      </div>
+      <button id="setTokenInBtn">Allow Token as Spend Source</button>
+      <div id="tokenInStatus" class="status hidden"></div>
+
+      <h2 style="margin-top:20px">Allowlist a Receive Token (tokenOut)</h2>
+      <div class="row">
+        <div class="field"><label>Token address</label><input id="tokenOutAddr" placeholder="0x..." /></div>
+      </div>
+      <button id="setTokenOutBtn">Allow Token as Receive Target</button>
+      <div id="tokenOutStatus" class="status hidden"></div>
+    </div>
+
+    <div id="depositCard" class="card hidden">
+      <h2>5. Deposit</h2>
+      <div class="row">
+        <div class="field"><label>Token address</label><input id="depositToken" placeholder="0x..." /></div>
+        <div class="field"><label>Amount (raw units)</label><input id="depositAmount" placeholder="e.g. 50000000000000000000" /></div>
+      </div>
+      <button id="depositBtn">Approve &amp; Deposit</button>
+      <div id="depositStatus" class="status hidden"></div>
+    </div>
+
+    <div id="withdrawCard" class="card hidden">
+      <h2>6. Withdraw (owner only, anytime)</h2>
+      <div class="row">
+        <div class="field"><label>Token address</label><input id="withdrawToken" placeholder="0x..." /></div>
+        <div class="field"><label>Amount (raw units)</label><input id="withdrawAmount" placeholder="0x..." /></div>
+        <div class="field"><label>Send to</label><input id="withdrawTo" placeholder="0x..." /></div>
+      </div>
+      <button id="withdrawBtn" class="secondary">Withdraw</button>
+      <div id="withdrawStatus" class="status hidden"></div>
+    </div>
+
+    <div id="linkCard" class="card hidden">
+      <h2>7. Link to Telegram</h2>
+      <p class="hint">Send this to the SAGE bot so it knows which vault is yours:</p>
+      <div class="copybox">
+        <code id="linkCmd"></code>
+        <button id="copyLinkBtn" class="secondary">Copy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- config: fill these in for your deployment ----
+const CONFIG = {
+  chainIdHex: "0x7a0", // 1952 decimal = 0x7a0
+  chainIdDecimal: 1952,
+  rpcUrl: "https://testrpc.xlayer.tech",
+  chainName: "X Layer Testnet",
+  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
+  blockExplorerUrl: "https://web3.okx.com/explorer/x-layer-testnet",
+  factoryAddress: "0x5B0195B9E86F01f5ad631BcA0C37C290b59ec7B8",
+  defaultAgent: "0x94311f930Bf95cECD9fc282A0E918509F7B36a5c",
+  // Last-known X Layer values from OKX docs (2026-08-18) — router/spender can
+  // rotate; verify before mainnet use, these are testnet-convenience defaults only.
+  defaultRouter: "0x7c5bee2a8091c3ef39072f64f18fac913060aeaf",
+  defaultSpender: "0x8b773D83bc66Be128c60e07E17C8901f7a64F000",
+};
+
+const FACTORY_ABI = [
+  "function vaultOf(address) view returns (address)",
+  "function createVault(address agent) returns (address)",
+];
+const VAULT_ABI = [
+  "function owner() view returns (address)",
+  "function agent() view returns (address)",
+  "function router() view returns (address)",
+  "function spender() view returns (address)",
+  "function setAgent(address) external",
+  "function setRouter(address) external",
+  "function setSpender(address) external",
+  "function setTokenIn(address token, bool allowed, uint256 perTradeCap, uint256 perDayCap) external",
+  "function setTokenOut(address token, bool allowed) external",
+  "function depositToken(address token, uint256 amount) external",
+  "function withdraw(address token, uint256 amount, address to) external",
+];
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+];
+
+let provider, signer, userAddress, vaultAddress;
+
+const $ = (id) => document.getElementById(id);
+function showStatus(el, msg, ok) {
+  el.textContent = msg;
+  el.classList.remove("hidden", "ok", "err");
+  el.classList.add(ok ? "ok" : "err");
+}
+function txStatus(el, label) {
+  showStatus(el, label + " — confirm in your wallet...", true);
+}
+
+async function ensureNetwork() {
+  const chainId = await window.ethereum.request({ method: "eth_chainId" });
+  if (chainId === CONFIG.chainIdHex) return true;
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: CONFIG.chainIdHex }],
+    });
+    return true;
+  } catch (switchErr) {
+    if (switchErr.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: CONFIG.chainIdHex,
+          chainName: CONFIG.chainName,
+          nativeCurrency: CONFIG.nativeCurrency,
+          rpcUrls: [CONFIG.rpcUrl],
+          blockExplorerUrls: [CONFIG.blockExplorerUrl],
+        }],
+      });
+      return true;
+    }
+    throw switchErr;
+  }
+}
+
+async function connect() {
+  if (!window.ethereum) {
+    showStatus($("networkStatus"), "No injected wallet found. Install OKX Wallet or MetaMask.", false);
+    $("networkStatus").classList.remove("hidden");
+    return;
+  }
+  await window.ethereum.request({ method: "eth_requestAccounts" });
+  await ensureNetwork();
+
+  provider = new ethers.BrowserProvider(window.ethereum);
+  signer = await provider.getSigner();
+  userAddress = await signer.getAddress();
+
+  $("connectBtn").classList.add("hidden");
+  $("connectedAddr").textContent = userAddress;
+  $("connectedAddr").classList.remove("hidden");
+  $("networkStatus").classList.add("hidden");
+  $("vaultSection").classList.remove("hidden");
+
+  $("agentInput").value = CONFIG.defaultAgent;
+  $("routerInput").value = CONFIG.defaultRouter;
+  $("spenderInput").value = CONFIG.defaultSpender;
+
+  await refreshVault();
+}
+
+async function refreshVault() {
+  const factory = new ethers.Contract(CONFIG.factoryAddress, FACTORY_ABI, provider);
+  const addr = await factory.vaultOf(userAddress);
+
+  if (addr === ethers.ZeroAddress) {
+    $("noVault").classList.remove("hidden");
+    $("hasVault").classList.add("hidden");
+    return;
+  }
+
+  vaultAddress = addr;
+  $("noVault").classList.add("hidden");
+  $("hasVault").classList.remove("hidden");
+  ["configCard", "allowlistCard", "depositCard", "withdrawCard", "linkCard"].forEach((id) => $(id).classList.remove("hidden"));
+
+  const vault = new ethers.Contract(vaultAddress, VAULT_ABI, provider);
+  const [owner, agent, router, spender] = await Promise.all([
+    vault.owner(), vault.agent(), vault.router(), vault.spender(),
+  ]);
+
+  $("vaultAddr").textContent = vaultAddress;
+  $("vaultOwner").textContent = owner;
+  $("vaultAgent").textContent = agent;
+  $("vaultRouter").textContent = router;
+  $("vaultSpender").textContent = spender;
+
+  $("linkCmd").textContent = `/link ${userAddress}`;
+}
+
+async function createVault() {
+  try {
+    txStatus($("createStatus"), "Creating vault");
+    const factory = new ethers.Contract(CONFIG.factoryAddress, FACTORY_ABI, signer);
+    const tx = await factory.createVault($("agentInput").value || CONFIG.defaultAgent);
+    showStatus($("createStatus"), "Waiting for confirmation... tx: " + tx.hash, true);
+    await tx.wait();
+    showStatus($("createStatus"), "Vault created.", true);
+    await refreshVault();
+  } catch (e) {
+    showStatus($("createStatus"), e.shortMessage || e.message, false);
+  }
+}
+
+function vaultWithSigner() {
+  return new ethers.Contract(vaultAddress, VAULT_ABI, signer);
+}
+
+async function runVaultCall(fn, statusEl, label) {
+  try {
+    txStatus(statusEl, label);
+    const tx = await fn();
+    showStatus(statusEl, "Confirming... tx: " + tx.hash, true);
+    await tx.wait();
+    showStatus(statusEl, label + " done.", true);
+    await refreshVault();
+  } catch (e) {
+    showStatus(statusEl, e.shortMessage || e.message, false);
+  }
+}
+
+$("connectBtn").addEventListener("click", connect);
+$("createVaultBtn").addEventListener("click", createVault);
+
+$("setAgentBtn").addEventListener("click", () =>
+  runVaultCall(() => vaultWithSigner().setAgent($("agentInput").value), $("configStatus"), "Set agent"));
+$("setRouterBtn").addEventListener("click", () =>
+  runVaultCall(() => vaultWithSigner().setRouter($("routerInput").value), $("configStatus"), "Set router"));
+$("setSpenderBtn").addEventListener("click", () =>
+  runVaultCall(() => vaultWithSigner().setSpender($("spenderInput").value), $("configStatus"), "Set spender"));
+
+$("setTokenInBtn").addEventListener("click", () =>
+  runVaultCall(
+    () => vaultWithSigner().setTokenIn($("tokenInAddr").value, true, $("perTradeCap").value, $("perDayCap").value),
+    $("tokenInStatus"), "Allowlist tokenIn"
+  ));
+$("setTokenOutBtn").addEventListener("click", () =>
+  runVaultCall(
+    () => vaultWithSigner().setTokenOut($("tokenOutAddr").value, true),
+    $("tokenOutStatus"), "Allowlist tokenOut"
+  ));
+
+$("depositBtn").addEventListener("click", async () => {
+  try {
+    const token = new ethers.Contract($("depositToken").value, ERC20_ABI, signer);
+    txStatus($("depositStatus"), "Approving");
+    const approveTx = await token.approve(vaultAddress, $("depositAmount").value);
+    await approveTx.wait();
+
+    txStatus($("depositStatus"), "Depositing");
+    const vault = vaultWithSigner();
+    const depositTx = await vault.depositToken($("depositToken").value, $("depositAmount").value);
+    showStatus($("depositStatus"), "Confirming... tx: " + depositTx.hash, true);
+    await depositTx.wait();
+    showStatus($("depositStatus"), "Deposit done.", true);
+  } catch (e) {
+    showStatus($("depositStatus"), e.shortMessage || e.message, false);
+  }
+});
+
+$("withdrawBtn").addEventListener("click", () =>
+  runVaultCall(
+    () => vaultWithSigner().withdraw($("withdrawToken").value, $("withdrawAmount").value, $("withdrawTo").value || userAddress),
+    $("withdrawStatus"), "Withdraw"
+  ));
+
+$("copyLinkBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("linkCmd").textContent);
+  $("copyLinkBtn").textContent = "Copied";
+  setTimeout(() => ($("copyLinkBtn").textContent = "Copy"), 1500);
+});
+</script>
+</body>
+</html>

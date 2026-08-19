@@ -1,4 +1,5 @@
 require("@nomicfoundation/hardhat-toolbox");
+require("@okxweb3/hardhat-explorer-verify");
 require("dotenv").config();
 
 /** @type {import('hardhat/config').HardhatUserConfig} */
@@ -21,5 +22,11 @@ module.exports = {
       chainId: 196,
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
+  },
+  // Verification via OKX's official plugin: `npx hardhat okverify --network xlayerTestnet <address>`.
+  // Needs OKLINK_API_KEY in .env — apply for one free at oklink.com (My Account -> API Management),
+  // separate from any OKX account.
+  okxweb3explorer: {
+    apiKey: process.env.OKLINK_API_KEY || "",
   },
 };

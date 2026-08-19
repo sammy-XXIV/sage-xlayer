@@ -1,4 +1,4 @@
-# xtrade-agent
+# SAGE
 
 Self-custodial conversational trading agent on X Layer — built for the [BuildX AI Season Hackathon](https://web3.okx.com/xlayer/build-x-series) (submissions close Aug 21, 2026, 23:59 UTC).
 

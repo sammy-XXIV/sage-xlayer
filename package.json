@@ -1,5 +1,5 @@
 {
-  "name": "xtrade-agent",
+  "name": "sage",
   "version": "0.1.0",
   "private": true,
   "description": "Self-custodial conversational trading agent on X Layer (BuildX AI Season Hackathon)",
@@ -11,7 +11,8 @@
     "deploy:mainnet": "hardhat run scripts/deploy.js --network xlayerMainnet",
     "create-vault:testnet": "hardhat run scripts/createVault.js --network xlayerTestnet",
     "create-vault:mainnet": "hardhat run scripts/createVault.js --network xlayerMainnet",
-    "bot": "node bot/server.js"
+    "bot": "node bot/server.js",
+    "start": "node bot/server.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@okxweb3/hardhat-explorer-verify": "^1.6.5",
     "hardhat": "^2.22.15"
   }
 }

@@ -12,12 +12,12 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 bot.start((ctx) =>
   ctx.reply(
-    "xtrade-agent is online.\n\n" +
+    "SAGE is online.\n\n" +
       "This bot never holds your funds — you own a TradeVault contract, and the bot only gets a " +
       "capped session key to trade within limits you set.\n\n" +
-      "1. Deploy your vault yourself: `npm run create-vault:testnet` (uses your own key, not the bot's)\n" +
+      "1. Deploy your vault yourself: npm run create-vault:testnet (uses your own key, not the bot's)\n" +
       "2. Link it here: /link <your wallet address>\n" +
-      "3. Then just talk to me: \"buy $50 of ETH\", \"DCA $20 into ETH daily\", \"what's my portfolio\""
+      "3. Then just talk to me: buy $50 of ETH, DCA $20 into ETH daily, what's my portfolio"
   )
 );
 
@@ -53,7 +53,7 @@ app.use(express.json());
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`xtrade-agent bot server listening on :${PORT}`));
+app.listen(PORT, () => console.log(`SAGE bot server listening on :${PORT}`));
 
 bot.launch();
 rulesEngine.start(bot);
