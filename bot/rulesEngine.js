@@ -7,6 +7,7 @@ const cron = require("node-cron");
 const store = require("./store");
 const tokens = require("./tokens");
 const okxDex = require("./tools/okxDex");
+const swapBuilder = require("./tools/swapBuilder");
 const vaultChain = require("./tools/vaultChain");
 const copyTrading = require("./tools/copyTrading");
 const tokenMeta = require("./tools/tokenMeta");
@@ -44,7 +45,7 @@ async function currentPrice(tokenSymbol, quoteSymbol = "USDT") {
   const oneToken = await tokenMeta.oneWholeUnit(fromTokenAddress, provider);
   const quoteDecimals = await tokenMeta.getDecimals(toTokenAddress, provider);
 
-  const quote = await okxDex.getQuote({
+  const quote = await swapBuilder.getQuote({
     chainId: CHAIN_ID,
     fromTokenAddress,
     toTokenAddress,
@@ -60,7 +61,7 @@ async function fireTrade(rule, bot, { tokenOutSymbol, note } = {}) {
   const tokenInAddr = tokens.resolve(rule.tokenInSymbol, CHAIN_ID);
   const tokenOutAddr = tokens.resolve(outSymbol, CHAIN_ID);
 
-  const swap = await okxDex.buildSwap({
+  const swap = await swapBuilder.buildSwap({
     chainId: CHAIN_ID,
     fromTokenAddress: tokenInAddr,
     toTokenAddress: tokenOutAddr,

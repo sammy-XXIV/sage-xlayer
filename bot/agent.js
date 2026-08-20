@@ -8,6 +8,7 @@ const anthropic = require("./claudeClient");
 const store = require("./store");
 const tokens = require("./tokens");
 const okxDex = require("./tools/okxDex");
+const swapBuilder = require("./tools/swapBuilder");
 const vaultChain = require("./tools/vaultChain");
 const { checkTokenSafety } = require("./tools/safety");
 const { assessConcentrationRisk } = require("./tools/portfolioRisk");
@@ -184,7 +185,7 @@ async function runTool(name, input, telegramId) {
     case "get_quote": {
       const fromTokenAddress = tokens.resolve(input.tokenInSymbol, CHAIN_ID);
       const toTokenAddress = tokens.resolve(input.tokenOutSymbol, CHAIN_ID);
-      return okxDex.getQuote({ chainId: CHAIN_ID, fromTokenAddress, toTokenAddress, amount: input.amountIn });
+      return swapBuilder.getQuote({ chainId: CHAIN_ID, fromTokenAddress, toTokenAddress, amount: input.amountIn });
     }
 
     case "get_v4_pool_info":
@@ -218,7 +219,7 @@ async function runTool(name, input, telegramId) {
     case "execute_trade": {
       const tokenInAddr = tokens.resolve(input.tokenInSymbol, CHAIN_ID);
       const tokenOutAddr = tokens.resolve(input.tokenOutSymbol, CHAIN_ID);
-      const swap = await okxDex.buildSwap({
+      const swap = await swapBuilder.buildSwap({
         chainId: CHAIN_ID,
         fromTokenAddress: tokenInAddr,
         toTokenAddress: tokenOutAddr,
