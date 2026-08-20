@@ -10,6 +10,8 @@ const tokens = require("./tokens");
 const okxDex = require("./tools/okxDex");
 const vaultChain = require("./tools/vaultChain");
 const { checkTokenSafety } = require("./tools/safety");
+const { assessConcentrationRisk } = require("./tools/portfolioRisk");
+const { getPoolInfo } = require("./tools/v4Pool");
 const rules = require("./tools/rules");
 
 // OKX's DEX aggregator only lists X Layer mainnet (196), not testnet (1952) —
@@ -31,8 +33,24 @@ Ground rules:
 - Whenever you execute a trade (execute_trade), give a short reasoning line alongside it: why,
   what would invalidate the idea, and the rough size relative to the user's caps. Never execute
   silently.
+- Before any trade or rule that would meaningfully change the user's holdings of a token (not a
+  tiny top-up), call check_portfolio_risk first. This is on-chain-cap-independent: it checks
+  whether the resulting position would be too concentrated in one asset. If it reports
+  supported: false, say plainly that portfolio risk couldn't be assessed (price data unavailable)
+  and let the user decide whether to proceed anyway. If withinLimit is false, warn clearly with
+  the projected concentration and do NOT execute until the user explicitly confirms they want to
+  proceed despite the warning.
 - For recurring or conditional strategies ("DCA daily", "buy the dip below $X"), use create_rule
   instead of execute_trade — the rules engine checks it every 5 minutes and fires within caps.
+- For copy-trading ("follow this wallet", "mirror 0xabc..."), use create_rule with kind=copy,
+  tokenInSymbol as the base token to spend (ask the user which, default USDT), amountIn as the
+  size per mirrored trade, and followAddress as the wallet to watch. Only the followed wallet's
+  buys get mirrored, sized to the user's own amountIn — never the whale's absolute size. Make
+  clear up front that this only mirrors trades in tokens your vault already recognizes.
+- When you propose a trade (one-shot or as part of reasoning), state a rough confidence read —
+  high/medium/low, or a short number if you have real signal (e.g. from get_quote's price impact
+  or recent trend) — plus what would change your mind. Don't fabricate precision you don't have;
+  a plain "this is a guess, not a signal" is better than false confidence.
 - Keep replies short and direct. No disclaimers-as-filler beyond what's materially useful.
 - Plain text only. Telegram is not rendering markdown here — never use *, _, #, backticks, or any
   other markdown syntax. No bold, no headers, no bullet asterisks. Use line breaks and plain
@@ -58,12 +76,43 @@ const TOOLS = [
     },
   },
   {
+    name: "get_v4_pool_info",
+    description:
+      "Read a Uniswap v4 pool directly (price, tick, liquidity) on X Layer mainnet, as a second price source alongside get_quote. Read-only, no execution.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tokenAAddress: { type: "string" },
+        tokenBAddress: { type: "string" },
+        fee: { type: "number", description: "pool fee in hundredths of a bip, e.g. 3000 for 0.3%" },
+        tickSpacing: { type: "number" },
+        hooksAddress: { type: "string", description: "defaults to the zero address (no hooks) if omitted" },
+      },
+      required: ["tokenAAddress", "tokenBAddress", "fee", "tickSpacing"],
+    },
+  },
+  {
     name: "check_token_safety",
     description: "Run a rug/honeypot safety check on a token contract address before trading it.",
     input_schema: {
       type: "object",
       properties: { tokenAddress: { type: "string" } },
       required: ["tokenAddress"],
+    },
+  },
+  {
+    name: "check_portfolio_risk",
+    description:
+      "Check whether a proposed trade would over-concentrate the vault in one asset. Call before any non-trivial execute_trade or create_rule.",
+    input_schema: {
+      type: "object",
+      properties: {
+        proposedTokenOutSymbol: { type: "string" },
+        proposedAmountOutRaw: { type: "string", description: "estimated amount received, in tokenOut's smallest unit (use get_quote first if unsure)" },
+        proposedTokenInSymbol: { type: "string", description: "token being spent — supply it so the check models the real post-trade position" },
+        proposedAmountInRaw: { type: "string", description: "amount spent, in tokenIn's smallest unit" },
+      },
+      required: ["proposedTokenOutSymbol", "proposedAmountOutRaw"],
     },
   },
   {
@@ -81,14 +130,16 @@ const TOOLS = [
   },
   {
     name: "create_rule",
-    description: "Create a recurring (DCA) or conditional (price trigger) trading rule.",
+    description:
+      "Create a recurring (DCA), conditional (price trigger), or copy-trading rule. For copy rules, " +
+      "tokenOutSymbol is omitted — the token bought is whatever the followed wallet buys.",
     input_schema: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["dca", "conditional"] },
-        tokenInSymbol: { type: "string" },
-        tokenOutSymbol: { type: "string" },
-        amountIn: { type: "string", description: "amount of tokenIn per trigger, in its smallest unit" },
+        kind: { type: "string", enum: ["dca", "conditional", "copy"] },
+        tokenInSymbol: { type: "string", description: "for kind=copy, the base token spent to mirror each buy (e.g. USDT)" },
+        tokenOutSymbol: { type: "string", description: "required for dca/conditional; omit for copy" },
+        amountIn: { type: "string", description: "amount of tokenIn per trigger/mirrored trade, in its smallest unit" },
         schedule: { type: "string", enum: ["daily", "weekly"], description: "required for kind=dca" },
         condition: {
           type: "object",
@@ -99,8 +150,9 @@ const TOOLS = [
             value: { type: "number" },
           },
         },
+        followAddress: { type: "string", description: "required for kind=copy — the wallet address to mirror" },
       },
-      required: ["kind", "tokenInSymbol", "tokenOutSymbol", "amountIn"],
+      required: ["kind", "tokenInSymbol", "amountIn"],
     },
   },
   {
@@ -116,7 +168,7 @@ const TOOLS = [
 ];
 
 async function runTool(name, input, telegramId) {
-  const user = store.getUser(telegramId);
+  const user = await store.getUser(telegramId);
   if (!user?.vaultAddress && name !== "list_rules") {
     return { error: "No vault linked yet. Deploy a TradeVault via the factory and link it with /link <address> first." };
   }
@@ -126,7 +178,7 @@ async function runTool(name, input, telegramId) {
       const tokenAddrs = Object.fromEntries(
         ["USDT", "WETH", "OKB"].map((s) => [s, tokens.resolve(s, CHAIN_ID)])
       );
-      return vaultChain.readVaultState(user.vaultAddress, tokenAddrs);
+      return vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
     }
 
     case "get_quote": {
@@ -135,8 +187,33 @@ async function runTool(name, input, telegramId) {
       return okxDex.getQuote({ chainId: CHAIN_ID, fromTokenAddress, toTokenAddress, amount: input.amountIn });
     }
 
+    case "get_v4_pool_info":
+      return getPoolInfo({
+        chainId: CHAIN_ID,
+        tokenAAddress: input.tokenAAddress,
+        tokenBAddress: input.tokenBAddress,
+        fee: input.fee,
+        tickSpacing: input.tickSpacing,
+        hooksAddress: input.hooksAddress,
+      });
+
     case "check_token_safety":
       return checkTokenSafety(input.tokenAddress, { chainId: CHAIN_ID });
+
+    case "check_portfolio_risk": {
+      const tokenAddrs = Object.fromEntries(
+        ["USDT", "WETH", "OKB"].map((s) => [s, tokens.resolve(s, CHAIN_ID)])
+      );
+      const state = await vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
+      return assessConcentrationRisk({
+        holdings: state.holdings,
+        chainId: CHAIN_ID,
+        proposedTokenOutSymbol: input.proposedTokenOutSymbol,
+        proposedAmountOutRaw: input.proposedAmountOutRaw,
+        proposedTokenInSymbol: input.proposedTokenInSymbol,
+        proposedAmountInRaw: input.proposedAmountInRaw,
+      });
+    }
 
     case "execute_trade": {
       const tokenInAddr = tokens.resolve(input.tokenInSymbol, CHAIN_ID);
@@ -149,17 +226,19 @@ async function runTool(name, input, telegramId) {
         slippagePercent: "1",
         userWalletAddress: user.vaultAddress,
       });
+      // No `|| 0` fallback: a missing minReceiveAmount must abort the trade,
+      // not execute it with slippage protection silently disabled.
       const result = await vaultChain.executeTrade({
         vaultAddress: user.vaultAddress,
         tokenIn: tokenInAddr,
         tokenOut: tokenOutAddr,
         amountIn: input.amountIn,
-        minAmountOut: swap.minReceiveAmount || 0,
+        minAmountOut: swap.minReceiveAmount,
         swapCalldata: swap.data,
         expectedRouter: swap.router,
         expectedSpender: swap.spender,
       });
-      store.recordTrade({
+      await store.recordTrade({
         telegramId,
         ruleId: null,
         tokenIn: input.tokenInSymbol,
@@ -180,6 +259,7 @@ async function runTool(name, input, telegramId) {
         amountIn: input.amountIn,
         schedule: input.schedule,
         condition: input.condition,
+        followAddress: input.followAddress,
       });
 
     case "list_rules":
@@ -197,9 +277,54 @@ async function runTool(name, input, telegramId) {
 // resets on process restart, which is fine for a hackathon deploy but worth
 // swapping for persisted history if that matters later.
 const HISTORY_LIMIT = 20;
+const MAX_TOOL_ITERATIONS = 10;
 const histories = new Map();
 
-async function handleMessage(telegramId, text) {
+/// Trim history without splitting a tool_use / tool_result pair.
+///
+/// A naive `slice(-N)` can start the window on a user message carrying
+/// tool_result blocks whose matching assistant tool_use was just cut off.
+/// The API rejects that outright, and since the bad prefix stays in the map,
+/// every later message in that chat fails too. So: trim, then walk forward to
+/// the first message that can legally begin a conversation.
+function trimHistory(history, limit = HISTORY_LIMIT) {
+  // A message can legally open a conversation only if it's a plain user turn:
+  // an assistant message, or a user message carrying tool_result blocks whose
+  // tool_use partner has been cut away, both get rejected.
+  const isOpener = (msg) =>
+    msg.role === "user" && !(Array.isArray(msg.content) && msg.content.some((b) => b.type === "tool_result"));
+
+  let trimmed = history.slice(-limit);
+  while (trimmed.length > 0 && !isOpener(trimmed[0])) {
+    trimmed = trimmed.slice(1);
+  }
+  if (trimmed.length > 0) return trimmed;
+
+  // Nothing in the window could open a conversation. Fall back to the most
+  // recent valid opener anywhere in the history rather than to the raw tail,
+  // which could itself be an assistant message and get rejected too.
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (isOpener(history[i])) return history.slice(i, i + limit);
+  }
+  return [];
+}
+
+// Serialise per chat. Two messages sent in quick succession would otherwise
+// run concurrently against the same mutable history array and interleave
+// their pushes, producing a message sequence the API rejects.
+const chains = new Map();
+
+function handleMessage(telegramId, text) {
+  const prev = chains.get(telegramId) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => handleMessageInner(telegramId, text));
+  chains.set(
+    telegramId,
+    next.catch(() => {})
+  );
+  return next;
+}
+
+async function handleMessageInner(telegramId, text) {
   const history = histories.get(telegramId) || [];
   history.push({ role: "user", content: text });
 
@@ -211,7 +336,15 @@ async function handleMessage(telegramId, text) {
     messages: history,
   });
 
+  // Bound the loop: without this a model that keeps calling tools spins
+  // forever, hanging the chat and burning API credits.
+  let iterations = 0;
   while (response.stop_reason === "tool_use") {
+    if (++iterations > MAX_TOOL_ITERATIONS) {
+      histories.set(telegramId, trimHistory(history));
+      return "I got stuck looping on tool calls and stopped to avoid running away. Try rephrasing, or ask for one step at a time.";
+    }
+
     const toolUses = response.content.filter((b) => b.type === "tool_use");
     history.push({ role: "assistant", content: response.content });
 
@@ -239,9 +372,9 @@ async function handleMessage(telegramId, text) {
 
   const textBlock = response.content.find((b) => b.type === "text");
   history.push({ role: "assistant", content: response.content });
-  histories.set(telegramId, history.slice(-HISTORY_LIMIT));
+  histories.set(telegramId, trimHistory(history));
 
   return textBlock?.text || "(no response)";
 }
 
-module.exports = { handleMessage };
+module.exports = { handleMessage, __trimHistory: trimHistory };

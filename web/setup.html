@@ -177,7 +177,7 @@
         <button id="setSpenderBtn" class="secondary">Set Spender</button>
       </div>
 
-      <div class="hint" style="margin-top:10px">Router/spender addresses can rotate — verify against OKX's live docs before mainnet use. Prefilled with X Layer's last-known values for testnet convenience only.</div>
+      <div class="hint" style="margin-top:10px" id="routerNote">Router and spender are different contracts. Check both against a live OKX /swap response before funding.</div>
       <div id="configStatus" class="status hidden"></div>
     </div>
 
@@ -232,21 +232,46 @@
 </div>
 
 <script>
-// ---- config: fill these in for your deployment ----
-const CONFIG = {
-  chainIdHex: "0x7a0", // 1952 decimal = 0x7a0
-  chainIdDecimal: 1952,
-  rpcUrl: "https://testrpc.xlayer.tech",
-  chainName: "X Layer Testnet",
-  nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
-  blockExplorerUrl: "https://web3.okx.com/explorer/x-layer-testnet",
-  factoryAddress: "0x5B0195B9E86F01f5ad631BcA0C37C290b59ec7B8",
-  defaultAgent: "0x94311f930Bf95cECD9fc282A0E918509F7B36a5c",
-  // Last-known X Layer values from OKX docs (2026-08-18) — router/spender can
-  // rotate; verify before mainnet use, these are testnet-convenience defaults only.
-  defaultRouter: "0x7c5bee2a8091c3ef39072f64f18fac913060aeaf",
-  defaultSpender: "0x8b773D83bc66Be128c60e07E17C8901f7a64F000",
+// ---- config: per-network, keyed by chain id ----
+//
+// The OKX router/spender addresses below exist ONLY on X Layer mainnet (196).
+// They were previously prefilled on the testnet config, which produced vaults
+// pointed at addresses with no code on 1952 — every trade would revert. They
+// are deliberately blank for testnet: on testnet you must supply your own
+// router (e.g. a deployed MockRouter) since OKX's aggregator doesn't serve
+// testnet liquidity at all.
+const NETWORKS = {
+  1952: {
+    chainIdHex: "0x7a0",
+    chainIdDecimal: 1952,
+    rpcUrl: "https://testrpc.xlayer.tech",
+    chainName: "X Layer Testnet",
+    nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
+    blockExplorerUrl: "https://web3.okx.com/explorer/x-layer-testnet",
+    factoryAddress: "0x5B0195B9E86F01f5ad631BcA0C37C290b59ec7B8",
+    defaultRouter: "",
+    defaultSpender: "",
+    routerNote:
+      "Testnet: OKX's aggregator does not serve X Layer testnet, and its mainnet router/spender have no code here. Point these at your own test router (e.g. MockRouter) or you will not be able to trade.",
+  },
+  196: {
+    chainIdHex: "0xc4",
+    chainIdDecimal: 196,
+    rpcUrl: "https://rpc.xlayer.tech",
+    chainName: "X Layer",
+    nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
+    blockExplorerUrl: "https://www.oklink.com/xlayer",
+    factoryAddress: "", // deploy the factory to mainnet, then fill this in
+    defaultRouter: "0x7c5bee2a8091c3ef39072f64f18fac913060aeaf",
+    defaultSpender: "0x8b773D83bc66Be128c60e07E17C8901f7a64F000",
+    routerNote:
+      "Prefilled from OKX's docs (2026-08-18). OKX warns these can rotate on contract upgrades — confirm against a live /swap response before funding.",
+  },
 };
+
+// Switch this to 196 once the factory is deployed to mainnet.
+const ACTIVE_CHAIN_ID = 1952;
+const CONFIG = { ...NETWORKS[ACTIVE_CHAIN_ID], defaultAgent: "0x94311f930Bf95cECD9fc282A0E918509F7B36a5c" };
 
 const FACTORY_ABI = [
   "function vaultOf(address) view returns (address)",
@@ -314,6 +339,15 @@ async function connect() {
     $("networkStatus").classList.remove("hidden");
     return;
   }
+  if (!CONFIG.factoryAddress) {
+    showStatus(
+      $("networkStatus"),
+      `No TradeVaultFactory deployed for ${CONFIG.chainName} yet — fill in factoryAddress in this page's NETWORKS config first.`,
+      false
+    );
+    return;
+  }
+
   await window.ethereum.request({ method: "eth_requestAccounts" });
   await ensureNetwork();
 
@@ -330,6 +364,7 @@ async function connect() {
   $("agentInput").value = CONFIG.defaultAgent;
   $("routerInput").value = CONFIG.defaultRouter;
   $("spenderInput").value = CONFIG.defaultSpender;
+  if (CONFIG.routerNote) $("routerNote").textContent = CONFIG.routerNote;
 
   await refreshVault();
 }

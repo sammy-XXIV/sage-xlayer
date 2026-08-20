@@ -23,10 +23,10 @@ async function buildDigestForUser(telegramId, user) {
     }).filter(Boolean)
   );
 
-  const state = await vaultChain.readVaultState(user.vaultAddress, tokenAddrs);
+  const state = await vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
   const since = Date.now() - 24 * 60 * 60 * 1000;
-  const trades = store.tradesForUser(telegramId, { since });
-  const rules = store.listRules(telegramId, { activeOnly: true });
+  const trades = await store.tradesForUser(telegramId, { since });
+  const rules = await store.listRules(telegramId, { activeOnly: true });
 
   const prompt = `You are the daily digest voice for SAGE, a self-custodial trading agent.
 Balances: ${JSON.stringify(state.balances)}
@@ -47,16 +47,11 @@ Plain text only — Telegram won't render markdown here. Never use *, _, #, back
 }
 
 function start(bot) {
-  // 09:00 UTC daily. store.js only exposes single-user getters, so iterate
-  // the raw db file directly here rather than adding a listUsers() just for this.
+  // 09:00 UTC daily. Goes through store.listUsers() rather than reading the
+  // db file directly — the direct read hardcoded ./data/db.json and so found
+  // nothing at all once DATA_DIR pointed the store at a mounted volume.
   cron.schedule("0 9 * * *", async () => {
-    const fs = require("fs");
-    const path = require("path");
-    const dbPath = path.join(__dirname, "..", "data", "db.json");
-    if (!fs.existsSync(dbPath)) return;
-    const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
-
-    for (const [telegramId, user] of Object.entries(db.users)) {
+    for (const [telegramId, user] of await store.listUsers()) {
       if (!user.vaultAddress) continue;
       try {
         const text = await buildDigestForUser(telegramId, user);

@@ -7,6 +7,7 @@ const store = require("./store");
 const rulesEngine = require("./rulesEngine");
 const digest = require("./digest");
 const { vaultForOwner } = require("./tools/factoryChain");
+const { transcribeAudio } = require("./tools/transcribe");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -30,21 +31,39 @@ bot.command("link", async (ctx) => {
     if (!vaultAddress) {
       return ctx.reply(`No vault found for ${ownerAddress} — deploy one first with \`npm run create-vault:testnet\`.`);
     }
-    store.upsertUser(String(ctx.from.id), { ownerAddress, vaultAddress });
+    await store.upsertUser(String(ctx.from.id), { ownerAddress, vaultAddress });
     ctx.reply(`Linked. Vault: ${vaultAddress}\nMake sure you've set a router and allowlisted tokens on it before trading.`);
   } catch (err) {
     ctx.reply(`Couldn't link: ${err.message}`);
   }
 });
 
-bot.on("text", async (ctx) => {
-  if (ctx.message.text.startsWith("/")) return; // unhandled commands fall through silently
+async function respond(ctx, text) {
   try {
-    const reply = await agent.handleMessage(String(ctx.from.id), ctx.message.text);
+    const reply = await agent.handleMessage(String(ctx.from.id), text);
     ctx.reply(reply);
   } catch (err) {
     console.error("agent error:", err);
     ctx.reply(`Something broke: ${err.message}`);
+  }
+}
+
+bot.on("text", async (ctx) => {
+  if (ctx.message.text.startsWith("/")) return; // unhandled commands fall through silently
+  await respond(ctx, ctx.message.text);
+});
+
+bot.on("voice", async (ctx) => {
+  try {
+    const fileLink = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
+    const res = await fetch(fileLink.href);
+    const audioBuffer = Buffer.from(await res.arrayBuffer());
+    const transcript = await transcribeAudio(audioBuffer, "voice.ogg");
+    await ctx.reply(`Heard: "${transcript}"`);
+    await respond(ctx, transcript);
+  } catch (err) {
+    console.error("voice error:", err);
+    ctx.reply(`Couldn't process that voice note: ${err.message}`);
   }
 });
 

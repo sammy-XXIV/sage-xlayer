@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const tokenMeta = require("./tokenMeta");
 
 const ARTIFACT_PATH = path.join(
   __dirname,
@@ -29,8 +30,13 @@ function loadDeployment() {
   return JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf8"));
 }
 
-function getProvider() {
-  const rpc = process.env.XLAYER_TESTNET_RPC || "https://testrpc.xlayer.tech";
+// Chain-aware: previously this was pinned to the testnet RPC regardless of
+// CHAIN_ID, so pointing the bot at mainnet would still have read testnet state.
+function getProvider(chainId = Number(process.env.CHAIN_ID || 1952)) {
+  const rpc =
+    Number(chainId) === 196
+      ? process.env.XLAYER_MAINNET_RPC || "https://rpc.xlayer.tech"
+      : process.env.XLAYER_TESTNET_RPC || "https://testrpc.xlayer.tech";
   return new ethers.JsonRpcProvider(rpc);
 }
 
@@ -45,23 +51,38 @@ function getVault(vaultAddress, signerOrProvider = getProvider()) {
   return new ethers.Contract(vaultAddress, loadAbi(), signerOrProvider);
 }
 
-async function readVaultState(vaultAddress, tokens) {
-  const vault = getVault(vaultAddress);
+/// Returns human-readable `balances` for display, plus `holdings` carrying the
+/// raw units + decimals + address per symbol. Anything doing math across two
+/// different tokens must use `holdings`, never `balances` — re-parsing the
+/// formatted string with a hardcoded 18 decimals is exactly the bug that made
+/// the concentration guardrail wrong by up to 1e12.
+async function readVaultState(vaultAddress, tokens, chainId = Number(process.env.CHAIN_ID || 1952)) {
+  const provider = getProvider(chainId);
+  const vault = getVault(vaultAddress, provider);
   const [owner, agent, router, spender] = await Promise.all([
     vault.owner(),
     vault.agent(),
     vault.router(),
     vault.spender(),
   ]);
+
   const balances = {};
-  const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
-  const provider = getProvider();
-  for (const [symbol, addr] of Object.entries(tokens)) {
-    const token = new ethers.Contract(addr, erc20Abi, provider);
-    const [bal, decimals] = await Promise.all([token.balanceOf(vaultAddress), token.decimals()]);
-    balances[symbol] = ethers.formatUnits(bal, decimals);
-  }
-  return { owner, agent, router, spender, balances };
+  const holdings = {};
+  const entries = Object.entries(tokens);
+
+  await Promise.all(
+    entries.map(async ([symbol, addr]) => {
+      const token = new ethers.Contract(addr, tokenMeta.ERC20_ABI, provider);
+      const [raw, decimals] = await Promise.all([
+        token.balanceOf(vaultAddress),
+        tokenMeta.getDecimals(addr, provider),
+      ]);
+      balances[symbol] = ethers.formatUnits(raw, decimals);
+      holdings[symbol] = { address: addr, raw: raw.toString(), decimals };
+    })
+  );
+
+  return { owner, agent, router, spender, balances, holdings };
 }
 
 /// Executes a trade using the agent's session key. `expectedRouter` /
@@ -74,6 +95,17 @@ async function readVaultState(vaultAddress, tokens) {
 /// This checks the two match before submitting, and fails loudly (asking the
 /// owner to re-run setRouter/setSpender) instead of risking a bad call.
 async function executeTrade({ vaultAddress, tokenIn, tokenOut, amountIn, minAmountOut, swapCalldata, expectedRouter, expectedSpender }) {
+  // Fail closed on slippage. Callers used to pass `swap.minReceiveAmount || 0`,
+  // which silently disabled slippage protection whenever the aggregator
+  // omitted that field — a trade with minAmountOut=0 will accept any output,
+  // including a sandwiched near-zero one.
+  if (minAmountOut === undefined || minAmountOut === null || minAmountOut === "") {
+    throw new Error("Refusing to trade: no minAmountOut (slippage floor) supplied. The quote did not return minReceiveAmount.");
+  }
+  if (BigInt(minAmountOut) <= 0n) {
+    throw new Error("Refusing to trade: minAmountOut is zero, which disables slippage protection entirely.");
+  }
+
   const vaultRead = getVault(vaultAddress);
   const [onChainRouter, onChainSpender] = await Promise.all([vaultRead.router(), vaultRead.spender()]);
 

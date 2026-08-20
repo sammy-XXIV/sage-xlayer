@@ -8,3 +8,6 @@ typechain/
 typechain-types/
 *.log
 data/
+
+# Supabase CLI local state (contains the linked project ref / pooler URL)
+supabase/.temp/
