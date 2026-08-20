@@ -13,8 +13,10 @@ const tokenMeta = require("./tools/tokenMeta");
 const { ethers } = require("ethers");
 
 // How far back to look on a copy rule's very first evaluation, in blocks.
-// X Layer's block time is short, so this is a generous few hours of history.
-const COPY_RULE_INITIAL_LOOKBACK_BLOCKS = 5000;
+// X Layer's RPC serves eth_getLogs 100 blocks at a time, so this costs
+// lookback/100 requests on the first tick — keep it modest. Steady-state ticks
+// only scan the ~5 minutes since the last one, which is a couple of chunks.
+const COPY_RULE_INITIAL_LOOKBACK_BLOCKS = Number(process.env.COPY_INITIAL_LOOKBACK_BLOCKS || 1000);
 
 function chainProvider() {
   const rpc = CHAIN_ID === 196 ? process.env.XLAYER_MAINNET_RPC : process.env.XLAYER_TESTNET_RPC;

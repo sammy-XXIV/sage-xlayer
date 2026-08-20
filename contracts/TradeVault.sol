@@ -38,6 +38,17 @@ contract TradeVault is ReentrancyGuard {
     mapping(address => uint256) public spentToday; // tokenIn => amount spent in current window
     mapping(address => uint256) public windowStart; // tokenIn => start of current 24h window
 
+    /// Owner-set worst acceptable exchange rate, as raw tokenOut units per 1e18
+    /// raw tokenIn units. 0 means "not configured" and the floor is skipped.
+    ///
+    /// Why this exists: `minAmountOut` is supplied by the AGENT, so a compromised
+    /// agent key could pass 0 (or 1 wei) and hand the swap away for nothing,
+    /// bleeding the vault at up to perDayCap per day. This floor is set by the
+    /// OWNER, so the worst-case rate is not something the agent can talk its way
+    /// past. Being raw-to-raw, it needs no decimals handling on-chain — the owner
+    /// computes the rate off-chain for the pair.
+    mapping(address => mapping(address => uint256)) public minOutRate;
+
     event Deposited(address indexed token, uint256 amount);
     event Withdrawn(address indexed token, uint256 amount, address indexed to);
     event AgentUpdated(address indexed agent);
@@ -45,6 +56,7 @@ contract TradeVault is ReentrancyGuard {
     event SpenderUpdated(address indexed spender);
     event TokenInUpdated(address indexed token, bool allowed, uint256 perTradeCap, uint256 perDayCap);
     event TokenOutUpdated(address indexed token, bool allowed);
+    event MinOutRateUpdated(address indexed tokenIn_, address indexed tokenOut_, uint256 rate);
     event TradeExecuted(
         address indexed tokenIn_,
         address indexed tokenOut_,
@@ -100,6 +112,13 @@ contract TradeVault is ReentrancyGuard {
         emit TokenOutUpdated(token, allowed);
     }
 
+    /// @param rate minimum raw `tokenOut_` units required per 1e18 raw `tokenIn_`
+    ///        units. Set 0 to disable the floor for this pair.
+    function setMinOutRate(address tokenIn_, address tokenOut_, uint256 rate) external onlyOwner {
+        minOutRate[tokenIn_][tokenOut_] = rate;
+        emit MinOutRateUpdated(tokenIn_, tokenOut_, rate);
+    }
+
     function withdraw(address token, uint256 amount, address to) external onlyOwner nonReentrant {
         IERC20(token).safeTransfer(to, amount);
         emit Withdrawn(token, amount, to);
@@ -127,6 +146,9 @@ contract TradeVault is ReentrancyGuard {
     ) external onlyAgent nonReentrant returns (uint256 amountOut) {
         require(router != address(0), "TradeVault: router not set");
         require(spender != address(0), "TradeVault: spender not set");
+        // Agent-supplied slippage floor must be meaningful. Zero would accept any
+        // output, including none at all.
+        require(minAmountOut > 0, "TradeVault: minAmountOut must be > 0");
 
         TokenLimits memory limits = tokenIn[tokenIn_];
         require(limits.allowed, "TradeVault: tokenIn not allowed");
@@ -152,6 +174,13 @@ contract TradeVault is ReentrancyGuard {
 
         amountOut = tokenOutErc20.balanceOf(address(this)) - balBefore;
         require(amountOut >= minAmountOut, "TradeVault: slippage");
+
+        // Owner-set floor, checked independently of whatever the agent asked for.
+        // This is the bound a compromised agent key cannot argue its way around.
+        uint256 rate = minOutRate[tokenIn_][tokenOut_];
+        if (rate != 0) {
+            require(amountOut >= (amountIn * rate) / 1e18, "TradeVault: below owner min rate");
+        }
 
         emit TradeExecuted(tokenIn_, tokenOut_, amountIn, amountOut);
     }

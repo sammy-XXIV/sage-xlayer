@@ -197,6 +197,20 @@
       </div>
       <button id="setTokenOutBtn">Allow Token as Receive Target</button>
       <div id="tokenOutStatus" class="status hidden"></div>
+
+      <h2 style="margin-top:20px">Worst Acceptable Rate (optional, recommended)</h2>
+      <div class="row">
+        <div class="field"><label>Spend token (tokenIn)</label><input id="rateTokenIn" placeholder="0x..." /></div>
+        <div class="field"><label>Receive token (tokenOut)</label><input id="rateTokenOut" placeholder="0x..." /></div>
+        <div class="field"><label>Min out per 1e18 in (raw)</label><input id="minOutRate" placeholder="e.g. 900000000000000000" /></div>
+      </div>
+      <button id="setMinOutRateBtn" class="secondary">Set Rate Floor</button>
+      <div class="hint" style="margin-top:8px">
+        The agent supplies its own slippage number on each trade, so that number cannot protect you if the
+        agent key is ever compromised. This floor is set by you and checked on-chain independently — it caps
+        how badly a rogue agent could ever fill an order. Leave unset (0) to disable.
+      </div>
+      <div id="minOutRateStatus" class="status hidden"></div>
     </div>
 
     <div id="depositCard" class="card hidden">
@@ -287,6 +301,8 @@ const VAULT_ABI = [
   "function setSpender(address) external",
   "function setTokenIn(address token, bool allowed, uint256 perTradeCap, uint256 perDayCap) external",
   "function setTokenOut(address token, bool allowed) external",
+  "function setMinOutRate(address tokenIn, address tokenOut, uint256 rate) external",
+  "function minOutRate(address,address) view returns (uint256)",
   "function depositToken(address token, uint256 amount) external",
   "function withdraw(address token, uint256 amount, address to) external",
 ];
@@ -444,6 +460,12 @@ $("setTokenInBtn").addEventListener("click", () =>
     () => vaultWithSigner().setTokenIn($("tokenInAddr").value, true, $("perTradeCap").value, $("perDayCap").value),
     $("tokenInStatus"), "Allowlist tokenIn"
   ));
+$("setMinOutRateBtn").addEventListener("click", () =>
+  runVaultCall(
+    () => vaultWithSigner().setMinOutRate($("rateTokenIn").value, $("rateTokenOut").value, $("minOutRate").value),
+    $("minOutRateStatus"), "Set rate floor"
+  ));
+
 $("setTokenOutBtn").addEventListener("click", () =>
   runVaultCall(
     () => vaultWithSigner().setTokenOut($("tokenOutAddr").value, true),

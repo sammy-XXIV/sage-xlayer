@@ -28,9 +28,11 @@ function symbolForAddress(address, chainId) {
   return hit ? hit[0] : null;
 }
 
-// Public RPCs commonly cap eth_getLogs to a bounded block span and reject
-// anything wider, so scan in chunks rather than asking for the whole window.
-const MAX_BLOCK_SPAN_PER_QUERY = 1000;
+// X Layer's public RPC rejects any eth_getLogs wider than 100 blocks with
+// "block range greater than 100 max" — measured against testrpc.xlayer.tech,
+// not assumed. An earlier 1000-block chunk size failed outright on every call.
+// Override via COPY_LOG_CHUNK_BLOCKS if you point at an RPC with a wider cap.
+const MAX_BLOCK_SPAN_PER_QUERY = Number(process.env.COPY_LOG_CHUNK_BLOCKS || 100);
 
 async function getLogsChunked(provider, filterBase, fromBlock, toBlock) {
   const logs = [];

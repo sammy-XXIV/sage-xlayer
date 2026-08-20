@@ -61,7 +61,7 @@ describe("TradeVault", function () {
       await expect(
         vault
           .connect(agentSigner)
-          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 0, swapCalldata)
+          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: not agent");
     });
 
@@ -133,7 +133,7 @@ describe("TradeVault", function () {
       await expect(
         vault
           .connect(agentSigner)
-          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 0, swapCalldata)
+          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: router not set");
     });
 
@@ -150,7 +150,7 @@ describe("TradeVault", function () {
       await expect(
         vault
           .connect(agentSigner)
-          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 0, swapCalldata)
+          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: spender not set");
     });
 
@@ -172,7 +172,7 @@ describe("TradeVault", function () {
       await expect(
         vault
           .connect(agentSigner)
-          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 0, swapCalldata)
+          .executeTrade(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("10", 18), 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: tokenOut not allowed");
     });
 
@@ -186,7 +186,7 @@ describe("TradeVault", function () {
         ethers.parseUnits("1", 18),
       ]);
       await expect(
-        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), tooBig, 0, swapCalldata)
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), tooBig, 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: exceeds per-trade cap");
     });
 
@@ -198,10 +198,10 @@ describe("TradeVault", function () {
       const calldataFor = async (amt) =>
         router.interface.encodeFunctionData("swap", [await usdt.getAddress(), await weth.getAddress(), amt, ethers.parseUnits("1", 18)]);
 
-      await vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), first, 0, await calldataFor(first));
+      await vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), first, 1, await calldataFor(first));
 
       await expect(
-        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), second, 0, await calldataFor(second))
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), second, 1, await calldataFor(second))
       ).to.be.revertedWith("TradeVault: exceeds per-day cap");
     });
 
@@ -233,7 +233,7 @@ describe("TradeVault", function () {
         ethers.parseUnits("1", 18),
       ]);
       await expect(
-        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 0, swapCalldata)
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: swap call failed");
     });
 
@@ -247,8 +247,103 @@ describe("TradeVault", function () {
         ethers.parseUnits("1", 18),
       ]);
       await expect(
-        vault.connect(strangerSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 0, swapCalldata)
+        vault.connect(strangerSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 1, swapCalldata)
       ).to.be.revertedWith("TradeVault: not agent");
+    });
+  });
+
+  // The threat model here is a COMPROMISED AGENT KEY. `minAmountOut` is an
+  // agent-supplied argument, so it cannot be trusted to protect the owner —
+  // an attacker simply passes 1 wei. The owner-set rate floor is the bound the
+  // agent has no way to talk past.
+  describe("compromised-agent bounds", function () {
+    async function configuredVault() {
+      const ctx = await deployFixture();
+      await ctx.vault.connect(ctx.ownerSigner).setRouter(await ctx.router.getAddress());
+      await ctx.vault.connect(ctx.ownerSigner).setSpender(await ctx.router.getAddress());
+      await ctx.vault
+        .connect(ctx.ownerSigner)
+        .setTokenIn(await ctx.usdt.getAddress(), true, ethers.parseUnits("100", 18), ethers.parseUnits("150", 18));
+      await ctx.vault.connect(ctx.ownerSigner).setTokenOut(await ctx.weth.getAddress(), true);
+      return ctx;
+    }
+
+    it("rejects minAmountOut of zero, which would accept any output at all", async function () {
+      const { vault, agentSigner, usdt, weth, router } = await configuredVault();
+      const amountIn = ethers.parseUnits("10", 18);
+      const swapCalldata = router.interface.encodeFunctionData("swap", [
+        await usdt.getAddress(),
+        await weth.getAddress(),
+        amountIn,
+        ethers.parseUnits("1", 18),
+      ]);
+      await expect(
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 0, swapCalldata)
+      ).to.be.revertedWith("TradeVault: minAmountOut must be > 0");
+    });
+
+    it("stops an agent that passes 1 wei to dodge its own slippage check", async function () {
+      const { vault, ownerSigner, agentSigner, usdt, weth, router } = await configuredVault();
+      // Owner: "never accept worse than 0.9 WETH per 1 USDT on this pair."
+      await vault
+        .connect(ownerSigner)
+        .setMinOutRate(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("0.9", 18));
+
+      const amountIn = ethers.parseUnits("10", 18);
+      // Attacker routes at a terrible rate (0.1 out per 1 in) and passes
+      // minAmountOut = 1 so their own slippage check trivially passes.
+      const swapCalldata = router.interface.encodeFunctionData("swap", [
+        await usdt.getAddress(),
+        await weth.getAddress(),
+        amountIn,
+        ethers.parseUnits("0.1", 18),
+      ]);
+
+      await expect(
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 1, swapCalldata)
+      ).to.be.revertedWith("TradeVault: below owner min rate");
+    });
+
+    it("still allows an honest trade that clears the owner's floor", async function () {
+      const { vault, ownerSigner, agentSigner, usdt, weth, router } = await configuredVault();
+      await vault
+        .connect(ownerSigner)
+        .setMinOutRate(await usdt.getAddress(), await weth.getAddress(), ethers.parseUnits("0.9", 18));
+
+      const amountIn = ethers.parseUnits("10", 18);
+      const swapCalldata = router.interface.encodeFunctionData("swap", [
+        await usdt.getAddress(),
+        await weth.getAddress(),
+        amountIn,
+        ethers.parseUnits("1", 18), // 1:1, comfortably above the 0.9 floor
+      ]);
+
+      await expect(
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 1, swapCalldata)
+      ).to.emit(vault, "TradeExecuted");
+    });
+
+    it("skips the floor when the owner has not configured one (rate 0)", async function () {
+      const { vault, agentSigner, usdt, weth, router } = await configuredVault();
+      const amountIn = ethers.parseUnits("10", 18);
+      const swapCalldata = router.interface.encodeFunctionData("swap", [
+        await usdt.getAddress(),
+        await weth.getAddress(),
+        amountIn,
+        ethers.parseUnits("0.1", 18),
+      ]);
+      await expect(
+        vault.connect(agentSigner).executeTrade(await usdt.getAddress(), await weth.getAddress(), amountIn, 1, swapCalldata)
+      ).to.emit(vault, "TradeExecuted");
+    });
+
+    it("only lets the owner set the rate floor, not the agent", async function () {
+      const { vault, agentSigner, strangerSigner, usdt, weth } = await configuredVault();
+      for (const signer of [agentSigner, strangerSigner]) {
+        await expect(
+          vault.connect(signer).setMinOutRate(await usdt.getAddress(), await weth.getAddress(), 1)
+        ).to.be.revertedWith("TradeVault: not owner");
+      }
     });
   });
 });
