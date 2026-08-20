@@ -1,7 +1,16 @@
 {
   "xlayerTestnet": {
-    "factory": "0x5B0195B9E86F01f5ad631BcA0C37C290b59ec7B8",
+    "factory": "0x88f54c22D4E96AE58A32509e99a3db24c1c1D6aE",
     "chainId": 1952,
-    "deployedAt": "2026-08-19T03:55:02.468Z"
+    "demo": {
+      "router": "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
+      "spender": "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
+      "tokens": {
+        "USDT": "0x868723385990CF2E106B85d39a91C1B98B1DCc7b",
+        "WETH": "0x9C5F42550661767608b8A3367071D0E750593963"
+      },
+      "vault": "0x923aCdF2327aE1EEa0fEc5e75cF802C37Ac5997C"
+    },
+    "deployedAt": "2026-08-20T04:08:42.871Z"
   }
 }
