@@ -60,7 +60,17 @@ bot.on("voice", async (ctx) => {
     const audioBuffer = Buffer.from(await res.arrayBuffer());
     const transcript = await transcribeAudio(audioBuffer, "voice.ogg");
     await ctx.reply(`Heard: "${transcript}"`);
-    await respond(ctx, transcript);
+
+    // Speech-to-text mangles tickers — "USDT into WETH" came back as
+    // "yuand with" in testing. Typed text means what it says; a transcript is
+    // a guess, so anything that would move funds gets confirmed first rather
+    // than executed on a possible mishearing.
+    await respond(
+      ctx,
+      `[This came from a voice note, so the wording may be misheard — especially token tickers and ` +
+        `amounts. Restate what you understood and ask me to confirm before executing any trade or ` +
+        `creating any rule. Read-only questions can be answered directly.]\n\n${transcript}`
+    );
   } catch (err) {
     console.error("voice error:", err);
     ctx.reply(`Couldn't process that voice note: ${err.message}`);
