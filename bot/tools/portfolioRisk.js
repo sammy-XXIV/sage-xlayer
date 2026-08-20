@@ -10,6 +10,7 @@
 // made every USDT (6dp) figure 1e12 too large and rendered the whole check
 // meaningless — hence the decimals plumbing here.
 
+const swapBuilder = require("./swapBuilder");
 const okxDex = require("./okxDex");
 const tokens = require("../tokens");
 
@@ -26,7 +27,7 @@ async function valueInQuote(tokenSymbol, rawAmount, chainId) {
   try {
     const fromTokenAddress = tokens.resolve(tokenSymbol, chainId);
     const toTokenAddress = tokens.resolve(QUOTE_SYMBOL, chainId);
-    const quote = await okxDex.getQuote({ chainId, fromTokenAddress, toTokenAddress, amount: amount.toString() });
+    const quote = await swapBuilder.getQuote({ chainId, fromTokenAddress, toTokenAddress, amount: amount.toString() });
     return BigInt(quote.toTokenAmount);
   } catch {
     return null;
@@ -57,8 +58,12 @@ async function assessConcentrationRisk({
   proposedAmountInRaw,
   maxConcentrationPercent = DEFAULT_MAX_CONCENTRATION_PERCENT,
 }) {
-  if (!okxDex.isConfigured()) {
-    return { supported: false, reason: "OKX DEX API not configured — can't price holdings to assess concentration risk." };
+  // Pricing goes through swapBuilder so this works wherever trading does: the
+  // OKX aggregator on mainnet, the demo router on testnet. Checking
+  // okxDex.isConfigured() directly used to make the guardrail unavailable on
+  // the very network the bot actually runs its demo on.
+  if (!swapBuilder.isDemoMode(chainId) && !okxDex.isConfigured()) {
+    return { supported: false, reason: "No price source configured — can't price holdings to assess concentration risk." };
   }
   if (!holdings || Object.keys(holdings).length === 0) {
     return { supported: false, reason: "No holdings data supplied." };

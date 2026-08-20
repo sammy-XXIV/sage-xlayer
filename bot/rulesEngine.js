@@ -61,11 +61,18 @@ async function fireTrade(rule, bot, { tokenOutSymbol, note } = {}) {
   const tokenInAddr = tokens.resolve(rule.tokenInSymbol, CHAIN_ID);
   const tokenOutAddr = tokens.resolve(outSymbol, CHAIN_ID);
 
+  // Rules store a human amount ("20"), so it stays readable in list_rules and
+  // survives a token whose decimals differ from the real-world default.
+  // Convert at fire time from what the token itself reports.
+  const amountInRaw = (
+    await tokenMeta.toRaw(rule.amountIn, tokenInAddr, chainProvider())
+  ).toString();
+
   const swap = await swapBuilder.buildSwap({
     chainId: CHAIN_ID,
     fromTokenAddress: tokenInAddr,
     toTokenAddress: tokenOutAddr,
-    amount: rule.amountIn,
+    amount: amountInRaw,
     slippagePercent: "1",
     userWalletAddress: rule.vaultAddress,
   });
@@ -76,7 +83,7 @@ async function fireTrade(rule, bot, { tokenOutSymbol, note } = {}) {
     vaultAddress: rule.vaultAddress,
     tokenIn: tokenInAddr,
     tokenOut: tokenOutAddr,
-    amountIn: rule.amountIn,
+    amountIn: amountInRaw,
     minAmountOut: swap.minReceiveAmount,
     swapCalldata: swap.data,
     expectedRouter: swap.router,

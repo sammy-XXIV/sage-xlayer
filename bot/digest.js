@@ -10,18 +10,9 @@ const vaultChain = require("./tools/vaultChain");
 const anthropic = require("./claudeClient");
 
 const CHAIN_ID = Number(process.env.CHAIN_ID || 1952);
-const TRACKED_SYMBOLS = ["USDT", "WETH", "OKB"];
 
 async function buildDigestForUser(telegramId, user) {
-  const tokenAddrs = Object.fromEntries(
-    TRACKED_SYMBOLS.map((s) => {
-      try {
-        return [s, tokens.resolve(s, CHAIN_ID)];
-      } catch {
-        return null;
-      }
-    }).filter(Boolean)
-  );
+  const tokenAddrs = tokens.addressMap(CHAIN_ID);
 
   const state = await vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
   const since = Date.now() - 24 * 60 * 60 * 1000;

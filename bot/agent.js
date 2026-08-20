@@ -13,6 +13,7 @@ const vaultChain = require("./tools/vaultChain");
 const { checkTokenSafety } = require("./tools/safety");
 const { assessConcentrationRisk } = require("./tools/portfolioRisk");
 const { getPoolInfo } = require("./tools/v4Pool");
+const tokenMeta = require("./tools/tokenMeta");
 const rules = require("./tools/rules");
 
 // OKX's DEX aggregator only lists X Layer mainnet (196), not testnet (1952) —
@@ -71,7 +72,7 @@ const TOOLS = [
       properties: {
         tokenInSymbol: { type: "string" },
         tokenOutSymbol: { type: "string" },
-        amountIn: { type: "string", description: "amount of tokenIn, in its smallest unit (wei-equivalent)" },
+        amountIn: { type: "string", description: "human amount of tokenIn, e.g. \"20\" for 20 USDT. Never wei — decimals are applied server-side." },
       },
       required: ["tokenInSymbol", "tokenOutSymbol", "amountIn"],
     },
@@ -109,9 +110,9 @@ const TOOLS = [
       type: "object",
       properties: {
         proposedTokenOutSymbol: { type: "string" },
-        proposedAmountOutRaw: { type: "string", description: "estimated amount received, in tokenOut's smallest unit (use get_quote first if unsure)" },
+        proposedAmountOutRaw: { type: "string", description: "human amount expected to be received, e.g. \"20\"." },
         proposedTokenInSymbol: { type: "string", description: "token being spent — supply it so the check models the real post-trade position" },
-        proposedAmountInRaw: { type: "string", description: "amount spent, in tokenIn's smallest unit" },
+        proposedAmountInRaw: { type: "string", description: "human amount spent, e.g. \"20\"." },
       },
       required: ["proposedTokenOutSymbol", "proposedAmountOutRaw"],
     },
@@ -124,7 +125,7 @@ const TOOLS = [
       properties: {
         tokenInSymbol: { type: "string" },
         tokenOutSymbol: { type: "string" },
-        amountIn: { type: "string", description: "amount of tokenIn, in its smallest unit" },
+        amountIn: { type: "string", description: "human amount of tokenIn, e.g. \"20\" for 20 USDT. Never wei — decimals are applied server-side." },
       },
       required: ["tokenInSymbol", "tokenOutSymbol", "amountIn"],
     },
@@ -140,7 +141,7 @@ const TOOLS = [
         kind: { type: "string", enum: ["dca", "conditional", "copy"] },
         tokenInSymbol: { type: "string", description: "for kind=copy, the base token spent to mirror each buy (e.g. USDT)" },
         tokenOutSymbol: { type: "string", description: "required for dca/conditional; omit for copy" },
-        amountIn: { type: "string", description: "amount of tokenIn per trigger/mirrored trade, in its smallest unit" },
+        amountIn: { type: "string", description: "human amount of tokenIn per trigger/mirrored trade, e.g. \"20\". Never wei." },
         schedule: { type: "string", enum: ["daily", "weekly"], description: "required for kind=dca" },
         condition: {
           type: "object",
@@ -176,16 +177,19 @@ async function runTool(name, input, telegramId) {
 
   switch (name) {
     case "get_portfolio": {
-      const tokenAddrs = Object.fromEntries(
-        ["USDT", "WETH", "OKB"].map((s) => [s, tokens.resolve(s, CHAIN_ID)])
-      );
+      // Whatever is actually configured for this chain — hardcoding a list
+      // meant one missing symbol threw and killed the entire tool call.
+      const tokenAddrs = tokens.addressMap(CHAIN_ID);
       return vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
     }
 
     case "get_quote": {
       const fromTokenAddress = tokens.resolve(input.tokenInSymbol, CHAIN_ID);
       const toTokenAddress = tokens.resolve(input.tokenOutSymbol, CHAIN_ID);
-      return swapBuilder.getQuote({ chainId: CHAIN_ID, fromTokenAddress, toTokenAddress, amount: input.amountIn });
+      const quoteAmountRaw = (
+        await tokenMeta.toRaw(input.amountIn, fromTokenAddress, vaultChain.getProvider(CHAIN_ID))
+      ).toString();
+      return swapBuilder.getQuote({ chainId: CHAIN_ID, fromTokenAddress, toTokenAddress, amount: quoteAmountRaw });
     }
 
     case "get_v4_pool_info":
@@ -202,28 +206,43 @@ async function runTool(name, input, telegramId) {
       return checkTokenSafety(input.tokenAddress, { chainId: CHAIN_ID });
 
     case "check_portfolio_risk": {
-      const tokenAddrs = Object.fromEntries(
-        ["USDT", "WETH", "OKB"].map((s) => [s, tokens.resolve(s, CHAIN_ID)])
-      );
+      // Whatever is actually configured for this chain — hardcoding a list
+      // meant one missing symbol threw and killed the entire tool call.
+      const tokenAddrs = tokens.addressMap(CHAIN_ID);
       const state = await vaultChain.readVaultState(user.vaultAddress, tokenAddrs, CHAIN_ID);
+      const provider = vaultChain.getProvider(CHAIN_ID);
+      const toRaw = async (human, symbol) =>
+        human === undefined || human === null
+          ? undefined
+          : (await tokenMeta.toRaw(human, tokens.resolve(symbol, CHAIN_ID), provider)).toString();
+
       return assessConcentrationRisk({
         holdings: state.holdings,
         chainId: CHAIN_ID,
         proposedTokenOutSymbol: input.proposedTokenOutSymbol,
-        proposedAmountOutRaw: input.proposedAmountOutRaw,
+        proposedAmountOutRaw: await toRaw(input.proposedAmountOutRaw, input.proposedTokenOutSymbol),
         proposedTokenInSymbol: input.proposedTokenInSymbol,
-        proposedAmountInRaw: input.proposedAmountInRaw,
+        proposedAmountInRaw: input.proposedTokenInSymbol
+          ? await toRaw(input.proposedAmountInRaw, input.proposedTokenInSymbol)
+          : undefined,
       });
     }
 
     case "execute_trade": {
       const tokenInAddr = tokens.resolve(input.tokenInSymbol, CHAIN_ID);
       const tokenOutAddr = tokens.resolve(input.tokenOutSymbol, CHAIN_ID);
+      // The model has no reliable way to know a token's decimals, and guessing
+      // the real-world default (USDT=6) against a chain where it differs
+      // silently trades a millionth of the intended size. Convert here, from
+      // the decimals the token itself reports.
+      const amountInRaw = (
+        await tokenMeta.toRaw(input.amountIn, tokenInAddr, vaultChain.getProvider(CHAIN_ID))
+      ).toString();
       const swap = await swapBuilder.buildSwap({
         chainId: CHAIN_ID,
         fromTokenAddress: tokenInAddr,
         toTokenAddress: tokenOutAddr,
-        amount: input.amountIn,
+        amount: amountInRaw,
         slippagePercent: "1",
         userWalletAddress: user.vaultAddress,
       });
@@ -233,7 +252,7 @@ async function runTool(name, input, telegramId) {
         vaultAddress: user.vaultAddress,
         tokenIn: tokenInAddr,
         tokenOut: tokenOutAddr,
-        amountIn: input.amountIn,
+        amountIn: amountInRaw,
         minAmountOut: swap.minReceiveAmount,
         swapCalldata: swap.data,
         expectedRouter: swap.router,

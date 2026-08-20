@@ -10,6 +10,9 @@ const path = require("path");
 
 const RISK_PATH = path.join(__dirname, "..", "bot", "tools", "portfolioRisk.js");
 const OKX_PATH = path.join(__dirname, "..", "bot", "tools", "okxDex.js");
+// portfolioRisk prices through swapBuilder so the guardrail works on whatever
+// chain trading works on. Stub that too, or the cached real one is used.
+const SWAP_PATH = path.join(__dirname, "..", "bot", "tools", "swapBuilder.js");
 const TOKENS_PATH = path.join(__dirname, "..", "bot", "tokens.js");
 
 // Prices used by the stub, in whole units: 1 WETH = 3000 USDT, 1 OKB = 50 USDT.
@@ -17,9 +20,7 @@ const PRICES = { WETH: 3000, OKB: 50 };
 const DECIMALS = { USDT: 6, WETH: 18, OKB: 18 };
 
 function loadWithStubs() {
-  delete require.cache[require.resolve(RISK_PATH)];
-  delete require.cache[require.resolve(OKX_PATH)];
-  delete require.cache[require.resolve(TOKENS_PATH)];
+  for (const p of [RISK_PATH, OKX_PATH, SWAP_PATH, TOKENS_PATH]) delete require.cache[require.resolve(p)];
 
   require.cache[require.resolve(TOKENS_PATH)] = {
     id: require.resolve(TOKENS_PATH),
@@ -28,20 +29,17 @@ function loadWithStubs() {
     exports: { resolve: (symbol) => `0x${symbol}` },
   };
 
-  require.cache[require.resolve(OKX_PATH)] = {
-    id: require.resolve(OKX_PATH),
-    filename: require.resolve(OKX_PATH),
-    loaded: true,
-    exports: {
-      isConfigured: () => true,
-      getQuote: async ({ fromTokenAddress, amount }) => {
-        const symbol = fromTokenAddress.slice(2);
-        const whole = Number(BigInt(amount)) / 10 ** DECIMALS[symbol];
-        const usdt = whole * PRICES[symbol];
-        return { toTokenAmount: BigInt(Math.round(usdt * 10 ** DECIMALS.USDT)).toString() };
-      },
-    },
+  const getQuote = async ({ fromTokenAddress, amount }) => {
+    const symbol = fromTokenAddress.slice(2);
+    const whole = Number(BigInt(amount)) / 10 ** DECIMALS[symbol];
+    const usdt = whole * PRICES[symbol];
+    return { toTokenAmount: BigInt(Math.round(usdt * 10 ** DECIMALS.USDT)).toString() };
   };
+  const stub = (p, exports) => {
+    require.cache[require.resolve(p)] = { id: require.resolve(p), filename: require.resolve(p), loaded: true, exports };
+  };
+  stub(OKX_PATH, { isConfigured: () => true, getQuote });
+  stub(SWAP_PATH, { getQuote, buildSwap: async () => ({}), isDemoMode: () => false });
 
   return require(RISK_PATH);
 }
@@ -126,6 +124,7 @@ describe("portfolioRisk.assessConcentrationRisk", function () {
   it("reports unsupported rather than guessing when the API is unconfigured", async function () {
     delete require.cache[require.resolve(RISK_PATH)];
     require.cache[require.resolve(OKX_PATH)].exports.isConfigured = () => false;
+    require.cache[require.resolve(SWAP_PATH)].exports.isDemoMode = () => false;
     const { assessConcentrationRisk: fn } = require(RISK_PATH);
 
     const res = await fn({
