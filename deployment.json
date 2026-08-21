@@ -6,10 +6,17 @@
       "router": "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
       "spender": "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
       "tokens": {
-        "USDT": "0x868723385990CF2E106B85d39a91C1B98B1DCc7b",
+        "USDT": "0x9e29b3AaDa05Bf2D2c827Af80Bd28Dc0b9b4FB0c",
+        "USDC": "0xcB8BF24c6cE16Ad21D707c9505421a17f2bec79D",
+        "USDG": "0xA78E2baaBaf5c4f36b7Fc394725Deb68D332EeC1",
         "WETH": "0x9C5F42550661767608b8A3367071D0E750593963"
       },
-      "vault": "0x923aCdF2327aE1EEa0fEc5e75cF802C37Ac5997C"
+      "vault": "0x923aCdF2327aE1EEa0fEc5e75cF802C37Ac5997C",
+      "faucetTokens": [
+        "USDT",
+        "USDC",
+        "USDG"
+      ]
     },
     "deployedAt": "2026-08-20T04:08:42.871Z"
   }

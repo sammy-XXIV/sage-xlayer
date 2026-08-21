@@ -15,6 +15,15 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const okxDex = require("./okxDex");
+const tokenMeta = require("./tokenMeta");
+
+function providerFor(chainId) {
+  const rpc =
+    Number(chainId) === 196
+      ? process.env.XLAYER_MAINNET_RPC || "https://rpc.xlayer.tech"
+      : process.env.XLAYER_TESTNET_RPC || "https://testrpc.xlayer.tech";
+  return new ethers.JsonRpcProvider(rpc);
+}
 
 const DEPLOYMENT_PATH = path.join(__dirname, "..", "..", "deployment.json");
 const MOCK_ROUTER_ARTIFACT = path.join(
@@ -28,8 +37,15 @@ const MOCK_ROUTER_ARTIFACT = path.join(
   "MockRouter.json"
 );
 
-// MockRouter fills at a caller-supplied rate. 1:1 keeps demo numbers legible.
-const DEMO_RATE = 10n ** 18n;
+// MockRouter computes amountOut = amountIn * rate / 1e18, entirely in raw
+// units. A flat 1e18 therefore only means "1:1" when both tokens share the
+// same decimals — pairing the faucet's 6-decimal USDT against an 18-decimal
+// token that way would pay out a millionth of the intended amount. Scale the
+// rate by the decimals gap so 1:1 holds in whole units, which is what anyone
+// reading the demo expects.
+function demoRate(decimalsIn, decimalsOut) {
+  return 10n ** BigInt(18 - Number(decimalsIn) + Number(decimalsOut));
+}
 
 function demoConfigFor(chainId) {
   if (!fs.existsSync(DEPLOYMENT_PATH)) return null;
@@ -38,15 +54,22 @@ function demoConfigFor(chainId) {
   return entry ? entry.demo : null;
 }
 
-function buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent }) {
+async function buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent, chainId }) {
   if (!fs.existsSync(MOCK_ROUTER_ARTIFACT)) {
     throw new Error("MockRouter artifact missing — run `npm run compile`.");
   }
   const abi = JSON.parse(fs.readFileSync(MOCK_ROUTER_ARTIFACT, "utf8")).abi;
   const iface = new ethers.Interface(abi);
 
+  const provider = providerFor(chainId);
+  const [decIn, decOut] = await Promise.all([
+    tokenMeta.getDecimals(fromTokenAddress, provider),
+    tokenMeta.getDecimals(toTokenAddress, provider),
+  ]);
+  const rate = demoRate(decIn, decOut);
+
   const amountIn = BigInt(amount);
-  const expectedOut = (amountIn * DEMO_RATE) / 10n ** 18n;
+  const expectedOut = (amountIn * rate) / 10n ** 18n;
 
   // Mirror the aggregator's contract: return a real minReceiveAmount so the
   // vault's slippage floor is exercised rather than bypassed.
@@ -56,7 +79,7 @@ function buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippag
   return {
     router: demo.router,
     spender: demo.spender,
-    data: iface.encodeFunctionData("swap", [fromTokenAddress, toTokenAddress, amountIn, DEMO_RATE]),
+    data: iface.encodeFunctionData("swap", [fromTokenAddress, toTokenAddress, amountIn, rate]),
     minReceiveAmount: minReceiveAmount.toString(),
     source: "demo-router",
   };
@@ -65,7 +88,7 @@ function buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippag
 async function buildSwap({ chainId, fromTokenAddress, toTokenAddress, amount, slippagePercent, userWalletAddress }) {
   const demo = demoConfigFor(chainId);
   if (demo) {
-    return buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent });
+    return buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent, chainId });
   }
 
   const swap = await okxDex.buildSwap({
@@ -85,10 +108,15 @@ async function buildSwap({ chainId, fromTokenAddress, toTokenAddress, amount, sl
 async function getQuote({ chainId, fromTokenAddress, toTokenAddress, amount }) {
   const demo = demoConfigFor(chainId);
   if (demo) {
+    const provider = providerFor(chainId);
+    const [decIn, decOut] = await Promise.all([
+      tokenMeta.getDecimals(fromTokenAddress, provider),
+      tokenMeta.getDecimals(toTokenAddress, provider),
+    ]);
     const amountIn = BigInt(amount);
     return {
       fromTokenAmount: amountIn.toString(),
-      toTokenAmount: ((amountIn * DEMO_RATE) / 10n ** 18n).toString(),
+      toTokenAmount: ((amountIn * demoRate(decIn, decOut)) / 10n ** 18n).toString(),
       source: "demo-router",
       note: "Fixed 1:1 demo router — X Layer testnet has no DEX to quote against.",
     };
