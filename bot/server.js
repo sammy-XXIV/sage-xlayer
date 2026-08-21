@@ -11,16 +11,31 @@ const { transcribeAudio } = require("./tools/transcribe");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-bot.start((ctx) =>
-  ctx.reply(
-    "SAGE is online.\n\n" +
-      "This bot never holds your funds — you own a TradeVault contract, and the bot only gets a " +
-      "capped session key to trade within limits you set.\n\n" +
-      "1. Deploy your vault yourself: npm run create-vault:testnet (uses your own key, not the bot's)\n" +
-      "2. Link it here: /link <your wallet address>\n" +
-      "3. Then just talk to me: buy $50 of ETH, DCA $20 into ETH daily, what's my portfolio"
-  )
-);
+// Where users create and configure their own vault. Everything there is signed
+// by their wallet — the bot is never in that loop.
+const SETUP_URL = process.env.SETUP_URL || "https://sammy-xxiv.github.io/sage-xlayer/web/setup.html";
+
+const ONBOARDING = `You need a vault before I can trade for you.
+
+Set one up here — takes a couple of minutes, all signed from your own wallet:
+${SETUP_URL}
+
+The page shows how many steps are left, and hands you a /link command to paste back here when it's done.
+
+You stay the owner throughout. I only ever get a capped key that can trade within your limits and can never withdraw.`;
+
+bot.start(async (ctx) => {
+  const user = await store.getUser(String(ctx.from.id));
+  if (user?.vaultAddress) {
+    return ctx.reply(
+      `Welcome back. Your vault is ${user.vaultAddress}.\n\n` +
+        "Try: what's my portfolio / buy 20 USDT worth of WETH / DCA 20 USDT into WETH daily / follow 0x... to mirror a wallet."
+    );
+  }
+  return ctx.reply(
+    "SAGE — a trading agent that keeps running when you're not here.\n\n" + ONBOARDING
+  );
+});
 
 bot.command("link", async (ctx) => {
   const ownerAddress = ctx.message.text.split(/\s+/)[1];
@@ -29,10 +44,16 @@ bot.command("link", async (ctx) => {
   try {
     const vaultAddress = await vaultForOwner(ownerAddress);
     if (!vaultAddress) {
-      return ctx.reply(`No vault found for ${ownerAddress} — deploy one first with \`npm run create-vault:testnet\`.`);
+      return ctx.reply(`No vault found for ${ownerAddress}.
+
+` + ONBOARDING);
     }
     await store.upsertUser(String(ctx.from.id), { ownerAddress, vaultAddress });
-    ctx.reply(`Linked. Vault: ${vaultAddress}\nMake sure you've set a router and allowlisted tokens on it before trading.`);
+    ctx.reply(
+      `Linked. Vault: ${vaultAddress}\n\n` +
+        `If you haven't finished configuring it — router, spender, allowlists, deposit — the setup page shows what's left:\n${SETUP_URL}\n\n` +
+        "Otherwise, ask me what's in your portfolio."
+    );
   } catch (err) {
     ctx.reply(`Couldn't link: ${err.message}`);
   }

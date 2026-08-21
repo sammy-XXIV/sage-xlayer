@@ -21,6 +21,9 @@ const rules = require("./tools/rules");
 // through. get_quote/execute_trade will throw a clear error against 1952.
 // Set CHAIN_ID=196 once trading for real; use 1952 only for vault/contract
 // testing against a local mock router.
+const SETUP_URL =
+  process.env.SETUP_URL || "https://sammy-xxiv.github.io/sage-xlayer/web/setup.html";
+
 const CHAIN_ID = Number(process.env.CHAIN_ID || 1952);
 
 const SYSTEM_PROMPT = `You are SAGE, a self-custodial conversational trading agent on X Layer.
@@ -172,7 +175,13 @@ const TOOLS = [
 async function runTool(name, input, telegramId) {
   const user = await store.getUser(telegramId);
   if (!user?.vaultAddress && name !== "list_rules") {
-    return { error: "No vault linked yet. Deploy a TradeVault via the factory and link it with /link <address> first." };
+    return {
+      error:
+        "This user has no vault linked yet. Tell them they need to create one first at " +
+        SETUP_URL +
+        " — it is signed entirely from their own wallet and hands them a /link command to paste back here. " +
+        "Do not mention npm, scripts, or anything requiring a terminal.",
+    };
   }
 
   switch (name) {
@@ -344,14 +353,37 @@ function handleMessage(telegramId, text) {
   return next;
 }
 
+/// Whether this user has a vault, folded into the system prompt.
+///
+/// Without it the model only discovers an unlinked user when a tool call fails,
+/// so a plain "hi" got a full capability pitch with no mention that nothing
+/// works yet. Onboarding has to lead, not wait for the user to hit a wall.
+async function systemPromptFor(telegramId) {
+  const user = await store.getUser(telegramId);
+  if (user?.vaultAddress) {
+    return `${SYSTEM_PROMPT}\n\nThis user is set up. Their vault is ${user.vaultAddress}.`;
+  }
+  return (
+    `${SYSTEM_PROMPT}\n\n` +
+    `THIS USER HAS NO VAULT YET, so nothing you can do will work until they make one. ` +
+    `Whatever they open with — even just a greeting — say plainly that they need to set up a vault ` +
+    `first and give them this link: ${SETUP_URL}\n` +
+    `It is signed entirely from their own wallet, takes a couple of minutes, and ends by handing them ` +
+    `a /link command to paste back here. You may briefly say what you'll be able to do afterwards, but ` +
+    `lead with the setup step. Never mention npm, scripts, or a terminal — they are not a developer.`
+  );
+}
+
 async function handleMessageInner(telegramId, text) {
   const history = histories.get(telegramId) || [];
   history.push({ role: "user", content: text });
 
+  const system = await systemPromptFor(telegramId);
+
   let response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+    system,
     tools: TOOLS,
     messages: history,
   });
@@ -384,7 +416,7 @@ async function handleMessageInner(telegramId, text) {
     response = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system,
       tools: TOOLS,
       messages: history,
     });

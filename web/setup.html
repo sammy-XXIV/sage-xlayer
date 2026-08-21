@@ -16,7 +16,8 @@
     --border-active: #e8e8e8;
     --text: #eaeaea;
     --dim: #8a8a8a;
-    --accent: #7dffb3;
+    --accent: #5fb2ff;
+    --ok: #7dffb3;
     --danger: #ff6b6b;
   }
   * { box-sizing: border-box; }
@@ -96,7 +97,7 @@
     margin-top: 10px;
     word-break: break-all;
   }
-  .status.ok { border-color: var(--accent); color: var(--accent); }
+  .status.ok { border-color: var(--ok); color: var(--ok); }
   .status.err { border-color: var(--danger); color: var(--danger); }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
   .kv dt { color: var(--dim); }
@@ -121,6 +122,21 @@
     font-size: 14px;
   }
   .copybox code { border: none; background: none; padding: 0; flex: 1; }
+  .checklist { list-style: none; padding: 0; margin: 0 0 12px; }
+  .checklist li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 2px solid var(--border);
+    font-size: 14px;
+  }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist .mark { flex: none; width: 1.2em; font-weight: 700; }
+  .checklist li.done .mark { color: var(--ok); }
+  .checklist li.done .what { color: var(--dim); text-decoration: line-through; }
+  .checklist li.todo .mark { color: var(--accent); }
+  .checklist .note { color: var(--dim); font-size: 12px; margin-left: auto; text-align: right; }
 </style>
 </head>
 <body>
@@ -138,6 +154,16 @@
   </div>
 
   <div id="vaultSection" class="hidden">
+    <div class="card" id="progressCard">
+      <h2>Setup progress</h2>
+      <p class="hint" style="margin-top:0">
+        Each step below is its own transaction you sign. This is one-time setup — once it's done,
+        SAGE trades without asking you to sign anything again.
+      </p>
+      <ul id="progressList" class="checklist"></ul>
+      <div id="progressSummary" class="hint"></div>
+    </div>
+
     <div class="card">
       <h2>2. Your Vault</h2>
       <div id="noVault">
@@ -267,6 +293,7 @@ const NETWORKS = {
     defaultSpender: "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
     routerNote:
       "Testnet: X Layer testnet has no DEX, so these point at the demo router deployed with this project. Everything else — vault, caps, allowlists, agent key — is real.",
+    knownTokens: {"USDT": "0x868723385990CF2E106B85d39a91C1B98B1DCc7b", "WETH": "0x9C5F42550661767608b8A3367071D0E750593963"},
   },
   196: {
     chainIdHex: "0xc4",
@@ -302,10 +329,13 @@ const VAULT_ABI = [
   "function setTokenIn(address token, bool allowed, uint256 perTradeCap, uint256 perDayCap) external",
   "function setTokenOut(address token, bool allowed) external",
   "function setMinOutRate(address tokenIn, address tokenOut, uint256 rate) external",
+  "function tokenIn(address) view returns (bool allowed, uint256 perTradeCap, uint256 perDayCap)",
+  "function tokenOut(address) view returns (bool)",
   "function minOutRate(address,address) view returns (uint256)",
   "function depositToken(address token, uint256 amount) external",
   "function withdraw(address token, uint256 amount, address to) external",
 ];
+const ERC20_BALANCE_ABI = ["function balanceOf(address) view returns (uint256)"];
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
 ];
@@ -385,6 +415,48 @@ async function connect() {
   await refreshVault();
 }
 
+// Reads real vault state rather than tracking which buttons were clicked, so
+// the checklist stays correct across refreshes, wallet switches, and a vault
+// that was already partly configured elsewhere.
+async function renderProgress(vaultState) {
+  const list = $("progressList");
+  const zero = ethers.ZeroAddress;
+
+  let steps;
+  if (!vaultState) {
+    steps = [{ label: "Create your vault", done: false, note: "you become the owner" }];
+  } else {
+    const { agent, router, spender, allowlisted, funded } = vaultState;
+    steps = [
+      { label: "Create your vault", done: true, note: "you are the owner" },
+      { label: "Authorise SAGE's session key", done: agent && agent !== zero, note: "agent" },
+      { label: "Set the swap router", done: router && router !== zero, note: "router" },
+      { label: "Set the token spender", done: spender && spender !== zero, note: "spender" },
+      {
+        label: "Allowlist tokens and caps",
+        done: allowlisted.length > 0,
+        note: allowlisted.length ? allowlisted.join(", ") : "none yet",
+      },
+      { label: "Deposit funds to trade with", done: funded, note: funded ? "funded" : "empty" },
+    ];
+  }
+
+  list.innerHTML = steps
+    .map(
+      (s) =>
+        `<li class="${s.done ? "done" : "todo"}">` +
+        `<span class="mark">${s.done ? "✓" : "○"}</span>` +
+        `<span class="what">${s.label}</span>` +
+        `<span class="note">${s.note}</span></li>`
+    )
+    .join("");
+
+  const remaining = steps.filter((s) => !s.done).length;
+  $("progressSummary").textContent = remaining
+    ? `${remaining} step${remaining === 1 ? "" : "s"} left — ${remaining} more signature${remaining === 1 ? "" : "s"}, then you are done signing for good.`
+    : "Setup complete. SAGE can now trade within your caps without asking you to sign again.";
+}
+
 async function refreshVault() {
   const factory = new ethers.Contract(CONFIG.factoryAddress, FACTORY_ABI, provider);
   const addr = await factory.vaultOf(userAddress);
@@ -392,6 +464,7 @@ async function refreshVault() {
   if (addr === ethers.ZeroAddress) {
     $("noVault").classList.remove("hidden");
     $("hasVault").classList.add("hidden");
+    await renderProgress(null);
     return;
   }
 
@@ -412,6 +485,28 @@ async function refreshVault() {
   $("vaultSpender").textContent = spender;
 
   $("linkCmd").textContent = `/link ${userAddress}`;
+
+  // Allowlist and balance checks are per-token, so they need addresses to ask
+  // about — CONFIG.knownTokens carries the ones this deployment ships with.
+  const known = CONFIG.knownTokens || {};
+  const erc20 = new ethers.Contract(ethers.ZeroAddress, ERC20_BALANCE_ABI, provider);
+  const allowlisted = [];
+  let funded = false;
+  for (const [symbol, address] of Object.entries(known)) {
+    try {
+      const [inCfg, outCfg, bal] = await Promise.all([
+        vault.tokenIn(address),
+        vault.tokenOut(address),
+        erc20.attach(address).balanceOf(vaultAddress),
+      ]);
+      if (inCfg.allowed || outCfg) allowlisted.push(symbol);
+      if (bal > 0n) funded = true;
+    } catch {
+      /* a token that can't be read just doesn't count toward progress */
+    }
+  }
+
+  await renderProgress({ agent, router, spender, allowlisted, funded });
 }
 
 async function createVault() {
