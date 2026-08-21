@@ -12,5 +12,6 @@ data/
 # Supabase CLI local state (contains the linked project ref / pooler URL)
 supabase/.temp/
 
-# Personal submission notes — useful locally, not for a public repo
+# Personal working notes — useful locally, not for a public repo
 SUBMISSION.md
+DEMO.md
