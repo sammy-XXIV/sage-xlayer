@@ -13,6 +13,12 @@ You talk to a Telegram bot in plain language — "buy $50 of ETH", "DCA $20 into
 - The session key has no path to `withdraw` or touch the allowlists. You can revoke it (`setAgent(0x0)`) at any time.
 - **Router vs. spender**: DEX aggregators (OKX included) use two different addresses — `router` is who the swap transaction is sent to, `spender` is who actually holds the ERC20 allowance and pulls funds. They're commonly different contracts. The vault tracks both separately (`setRouter` / `setSpender`) — approving the wrong one just means the swap fails to pull funds, so this distinction is load-bearing, not cosmetic.
 
+### Linking proves ownership
+
+`/link` requires a signature from the wallet that owns the vault, not just its address. The message embeds the user's Telegram ID and a time window, so a signature captured from one user cannot be replayed by another and expires in about 15 minutes. It authorises no transfer — it only proves control of the key.
+
+This matters because linking grants trading authority: an unauthenticated `/link` would let anyone drive a stranger's vault within its caps. `test/linkAuth.test.js` covers replay, impersonation, expiry, and — because the browser and the bot must build the signed message identically — extracts the real function out of `web/setup.html` and diffs it against the bot's.
+
 ### What a compromised agent key can and cannot do
 
 `owner` is `immutable` with no `transferOwnership`, and `executeTrade` is the *only* function the agent can reach — every setter and `withdraw` is `onlyOwner`. So an attacker holding the agent key **cannot withdraw, cannot re-point the router, and cannot widen the allowlists or caps**. That's structural, not a promise.
@@ -49,7 +55,7 @@ Inspiration note: copy-trading and the concentration guardrail are informed by r
 
 - `TradeVaultFactory.sol` — one call, `createVault(agent)`, deploys a vault owned by `msg.sender`.
 - `TradeVault.sol` — per-user vault: owner controls (`setAgent`, `setRouter`, `setSpender`, `setTokenIn`/`setTokenOut` with per-trade/per-day caps, `setMinOutRate`, `withdraw`), agent can only call `executeTrade` within those bounds.
-- 19 contract tests (47 in total across the suite) covering ownership, agent revocation, cap enforcement (per-trade, rolling per-day), tokenIn/tokenOut allowlisting, slippage protection, router-call failure handling, and the spender-not-set guard. Verified end-to-end (not just unit tests) against a live local Hardhat node: deploy → user creates their own vault → owner configures it → agent executes a trade → balances update correctly.
+- 19 contract tests (55 in total across the suite) covering ownership, agent revocation, cap enforcement (per-trade, rolling per-day), tokenIn/tokenOut allowlisting, slippage protection, router-call failure handling, and the spender-not-set guard. Verified end-to-end (not just unit tests) against a live local Hardhat node: deploy → user creates their own vault → owner configures it → agent executes a trade → balances update correctly.
 
 ## OKX DEX integration — verified against the live docs (2026-08-18)
 
@@ -61,9 +67,9 @@ Inspiration note: copy-trading and the concentration guardrail are informed by r
 - **The aggregator's supported-chains table only lists "X Layer" (mainnet, chainIndex assumed `196`) — no separate testnet entry.** Testnets generally don't have real liquidity for an aggregator to route through, so `get_quote`/`execute_trade` are expected to work on mainnet only; `bot/tools/okxDex.js` will throw a clear error if called with `CHAIN_ID=1952`. For a testnet demo, use `contracts/test-helpers/MockRouter.sol` instead — see the integration pattern in `test/TradeVault.test.js`.
 - The `196` chainIndex assumption (matching X Layer's real EVM chain ID, same pattern as Ethereum's chainIndex `1`) is not independently confirmed against a live authenticated API call — verify with real OKX API credentials before trusting it.
 
-## Correctness notes (bugs found in review, and what stops them recurring)
+## What testing caught
 
-A review pass caught several defects that a demo would not have surfaced, because with `CHAIN_ID=1952` most of these paths error out before reaching the bad math. Each fix has a regression test.
+Each of these was a live defect that a happy-path demo would not have surfaced, and each fix ships with a regression test. They are listed because the reasoning is the interesting part — most were silent, and two would have lost money.
 
 | Bug | Effect | Test |
 |---|---|---|
@@ -76,15 +82,14 @@ A review pass caught several defects that a demo would not have surfaced, becaus
 | Store wrote to a repo-relative `./data` | Every redeploy wiped users, rules and dedup state on an ephemeral host | moved to Supabase; `test/storeParity.test.js` |
 | `setup.html` prefilled OKX's mainnet router/spender on a testnet config | Those addresses have no code on 1952 — vaults configured from the page could never trade | per-network config in `web/setup.html` |
 
-Also hardened: `node-cron` ticks no longer overlap, the agent tool loop is capped at 10 iterations, per-chat messages are serialised, store writes are atomic (temp file + rename), `eth_getLogs` is chunked to 1000 blocks, and multi-hop swaps with ambiguous endpoints are skipped rather than guessed at.
+Also hardened: `node-cron` ticks no longer overlap, the agent tool loop is capped at 10 iterations, per-chat messages are serialised, store writes are atomic (temp file + rename), `eth_getLogs` is chunked to 100 blocks (X Layer's RPC rejects anything wider), and multi-hop swaps with ambiguous endpoints are skipped rather than guessed at.
 
 ## Known gaps / TODO before real funds touch this
 
-- **`config/tokens.json` is empty.** Fill in verified token addresses for X Layer mainnet before running the bot for real — do not guess.
-- **GoPlus's chain ID for X Layer is assumed, not confirmed** (`bot/tools/safety.js`) — verify or treat "unsupported" responses as "unknown," not "safe."
-- **`/link` doesn't verify wallet ownership** — it trusts whatever address you send it, checked only for having a vault on-chain. Fine for a testnet demo, not for anything real without a signature-based auth step.
+- **`config/tokens.json` is populated for testnet only.** `npm run setup-demo:testnet` writes the demo token addresses automatically. Mainnet entries are still blank and must be filled with verified addresses — do not guess.
+- **Token safety is mainnet-only.** GoPlus is confirmed working on X Layer mainnet (196) — verified against a live token, which came back flagged as an upgradeable proxy. On testnet it returns `supported: false`, which callers must treat as "unknown," never "safe."
 - Real OKX-routed trades only work once you're pointed at mainnet (`CHAIN_ID=196`) with funded API credentials — see the OKX integration note above.
-- **Copy-trading's initial lookback is ~5000 blocks** on first evaluation of a new rule. A mirror that fails is skipped rather than retried (deliberate: a missed copy is recoverable, a double-spend isn't), and dedup retains the newest 500 tx hashes per rule.
+- **Copy-trading's initial lookback is ~1000 blocks** on first evaluation of a new rule. A mirror that fails is skipped rather than retried (deliberate: a missed copy is recoverable, a double-spend isn't), and dedup retains the newest 500 tx hashes per rule.
 - **The JSON fallback backend is single-process only.** Its mutations are read-modify-write over one file, so more than one replica will lose writes. The Supabase backend has no such limit.
 - **Uniswap v4 pool reads are mainnet-only** (`get_v4_pool_info` throws on testnet) since the verified addresses are for chain 196.
 
@@ -98,7 +103,7 @@ Also hardened: `node-cron` ticks no longer overlap, the agent tool loop is cappe
 npm install
 cp .env.example .env   # fill in keys
 npm run compile
-npm test                        # 47 tests — run before touching a real network
+npm test                        # 55 tests — run before touching a real network
 npm run deploy:testnet          # deploys TradeVaultFactory, writes deployment.json
 npm run create-vault:testnet    # YOU create your own vault, with your own key
 npm run bot

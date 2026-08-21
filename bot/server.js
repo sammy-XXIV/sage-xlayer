@@ -8,6 +8,7 @@ const rulesEngine = require("./rulesEngine");
 const digest = require("./digest");
 const { vaultForOwner } = require("./tools/factoryChain");
 const { transcribeAudio } = require("./tools/transcribe");
+const { verifyLinkSignature } = require("./tools/linkAuth");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -38,19 +39,32 @@ bot.start(async (ctx) => {
 });
 
 bot.command("link", async (ctx) => {
-  const ownerAddress = ctx.message.text.split(/\s+/)[1];
-  if (!ownerAddress) return ctx.reply("Usage: /link <your wallet address>");
+  const telegramId = String(ctx.from.id);
+  const [, ownerAddress, signature] = ctx.message.text.trim().split(/\s+/);
+
+  // Linking grants the bot authority to trade that vault, so it has to be
+  // proven rather than claimed — otherwise anyone could type someone else's
+  // address and spend their funds inside the caps.
+  if (!ownerAddress || !signature) {
+    return ctx.reply(
+      `To link your vault I need proof you own the wallet — a signature, not just the address.\n\n` +
+        `Open the setup page, enter this Telegram ID, and click "Sign to link":\n\n` +
+        `Your Telegram ID: ${telegramId}\n\n${SETUP_URL}\n\n` +
+        `It gives you a complete /link command to paste back here. Signing proves ownership and authorises no transfer.`
+    );
+  }
+
+  const proof = verifyLinkSignature({ telegramId, address: ownerAddress, signature });
+  if (!proof.ok) return ctx.reply(proof.reason);
 
   try {
-    const vaultAddress = await vaultForOwner(ownerAddress);
+    const vaultAddress = await vaultForOwner(proof.address);
     if (!vaultAddress) {
-      return ctx.reply(`No vault found for ${ownerAddress}.
-
-` + ONBOARDING);
+      return ctx.reply(`No vault found for ${proof.address}.\n\n` + ONBOARDING);
     }
-    await store.upsertUser(String(ctx.from.id), { ownerAddress, vaultAddress });
+    await store.upsertUser(telegramId, { ownerAddress: proof.address, vaultAddress });
     ctx.reply(
-      `Linked. Vault: ${vaultAddress}\n\n` +
+      `Linked, ownership verified. Vault: ${vaultAddress}\n\n` +
         `If you haven't finished configuring it — router, spender, allowlists, deposit — the setup page shows what's left:\n${SETUP_URL}\n\n` +
         "Otherwise, ask me what's in your portfolio."
     );

@@ -262,11 +262,23 @@
 
     <div id="linkCard" class="card hidden">
       <h2>7. Link to Telegram</h2>
-      <p class="hint">Send this to the SAGE bot so it knows which vault is yours:</p>
-      <div class="copybox">
-        <code id="linkCmd"></code>
-        <button id="copyLinkBtn" class="secondary">Copy</button>
+      <p class="hint" style="margin-top:0">
+        Send <code>/link</code> to the SAGE bot — it will reply with your Telegram ID. Paste that
+        here and sign, so the bot can verify you actually own this wallet rather than taking your
+        word for it. Signing proves ownership and authorises no transfer.
+      </p>
+      <div class="row">
+        <div class="field"><label>Your Telegram ID (from the bot)</label><input id="telegramId" placeholder="e.g. 123456789" /></div>
+        <button id="signLinkBtn">Sign to link</button>
       </div>
+      <div id="linkOut" class="hidden">
+        <p class="hint">Paste this whole command back into the bot:</p>
+        <div class="copybox">
+          <code id="linkCmd"></code>
+          <button id="copyLinkBtn" class="secondary">Copy</button>
+        </div>
+      </div>
+      <div id="linkStatus" class="status hidden"></div>
     </div>
   </div>
 </div>
@@ -484,7 +496,8 @@ async function refreshVault() {
   $("vaultRouter").textContent = router;
   $("vaultSpender").textContent = spender;
 
-  $("linkCmd").textContent = `/link ${userAddress}`;
+  // The signed /link command is produced on demand in signLink() — it needs the
+  // Telegram ID, which only the bot can tell the user.
 
   // Allowlist and balance checks are per-token, so they need addresses to ask
   // about — CONFIG.knownTokens carries the ones this deployment ships with.
@@ -590,6 +603,40 @@ $("withdrawBtn").addEventListener("click", () =>
     () => vaultWithSigner().withdraw($("withdrawToken").value, $("withdrawAmount").value, $("withdrawTo").value || userAddress),
     $("withdrawStatus"), "Withdraw"
   ));
+
+// Must match bot/tools/linkAuth.js byte for byte — any difference in
+// whitespace or field order changes the hash and the signature will not verify.
+const LINK_WINDOW_MS = 15 * 60 * 1000;
+function buildLinkMessage(telegramId, address, window) {
+  return [
+    "SAGE vault link",
+    `Telegram ID: ${telegramId}`,
+    `Wallet: ${ethers.getAddress(address)}`,
+    `Window: ${window}`,
+    "",
+    "Signing this only proves you own this wallet. It authorises no transfer.",
+  ].join("\n");
+}
+
+async function signLink() {
+  const telegramId = $("telegramId").value.trim();
+  if (!/^\d+$/.test(telegramId)) {
+    showStatus($("linkStatus"), "Send /link to the bot first — it replies with your numeric Telegram ID.", false);
+    return;
+  }
+  try {
+    showStatus($("linkStatus"), "Confirm the signature in your wallet...", true);
+    const window_ = Math.floor(Date.now() / LINK_WINDOW_MS);
+    const signature = await signer.signMessage(buildLinkMessage(telegramId, userAddress, window_));
+    $("linkCmd").textContent = `/link ${userAddress} ${signature}`;
+    $("linkOut").classList.remove("hidden");
+    showStatus($("linkStatus"), "Signed. Paste the command into the bot within 15 minutes.", true);
+  } catch (e) {
+    showStatus($("linkStatus"), e.shortMessage || e.message, false);
+  }
+}
+
+$("signLinkBtn").addEventListener("click", signLink);
 
 $("copyLinkBtn").addEventListener("click", () => {
   navigator.clipboard.writeText($("linkCmd").textContent);
