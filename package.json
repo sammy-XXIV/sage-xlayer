@@ -14,7 +14,6 @@
     "bot": "node bot/server.js",
     "start": "node bot/server.js",
     "setup-demo:testnet": "hardhat run scripts/setupTestnetDemo.js --network xlayerTestnet",
-    "demo-trade:testnet": "hardhat run scripts/demoTrade.js --network xlayerTestnet",
     "use-faucet-tokens:testnet": "hardhat run scripts/useFaucetTokens.js --network xlayerTestnet"
   },
   "dependencies": {
