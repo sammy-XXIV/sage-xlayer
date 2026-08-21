@@ -52,8 +52,8 @@ What they could still do is fill orders badly. `minAmountOut` is an *agent-suppl
 | Agent | Claude (Anthropic SDK, tool-use loop) |
 | Chain | X Layer (Testnet 1952 → Mainnet 196) |
 | Contracts | Solidity 0.8.24 / Hardhat / OpenZeppelin |
-| Execution | Any DEX router the vault owner sets — OKX aggregator or Uniswap V3 on X Layer mainnet |
-| Persistence | Supabase (Postgres) when configured, JSON file fallback for local/offline |
+| Execution | OKX DEX aggregator, or any router the vault owner sets |
+| Persistence | Supabase (Postgres) |
 
 ## Contracts
 
