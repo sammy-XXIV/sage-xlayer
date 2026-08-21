@@ -1,6 +1,6 @@
 # SAGE
 
-Self-custodial conversational trading agent on X Layer — built for the [BuildX AI Season Hackathon](https://web3.okx.com/xlayer/build-x-series) (submissions close Aug 21, 2026, 23:59 UTC).
+Self-custodial conversational trading agent on X Layer, built for the [BuildX AI Season Hackathon](https://web3.okx.com/xlayer/build-x-series).
 
 | | |
 |---|---|
@@ -38,11 +38,11 @@ What they could still do is fill orders badly. `minAmountOut` is an *agent-suppl
 - **Plain-English strategies, not just one-shot trades** — "buy the dip below $3k" or "DCA daily" compiles into a rule the rules engine checks every 5 minutes and fires autonomously within your caps.
 - **Safety guardrail, not just executor** — before trading any non-core token, the agent runs a rug/honeypot check ([GoPlus Security](https://gopluslabs.io)) and will refuse or warn rather than trade blind.
 - **Trade reasoning, not silent execution** — every trade comes with a short rationale, not just a tx hash.
-- **Daily digest** — a proactive 09:00 UTC message: portfolio snapshot, what your rules did overnight, one AI observation. This is the loop that makes it a daily-use product, not a one-shot tool.
-- **Portfolio concentration guardrail** — before any trade that would meaningfully change your holdings, the agent checks whether the result would over-concentrate the vault in one asset (`bot/tools/portfolioRisk.js`, default cap 60%, `MAX_CONCENTRATION_PERCENT`). This is on top of the on-chain per-trade/per-day caps — a portfolio-level check, not just a single-trade one.
-- **Copy-trading** — "follow 0xabc..." creates a rule that watches a wallet's swaps (via ERC20 Transfer-log inference, so it works regardless of which router they used) and mirrors their buys into your vault, sized to your own chosen amount, not theirs (`bot/tools/copyTrading.js`).
-- **Voice-note trading** — send a Telegram voice message; it's transcribed (OpenAI Whisper, needs `OPENAI_API_KEY`) and fed through the same intent pipeline as text.
-- **Uniswap v4 pool reads** — `get_v4_pool_info` reads a pool's live price/tick/liquidity directly from X Layer's verified v4 `StateView` contract, as a second price source alongside the router quote. Read-only — no swap execution added here.
+- **Daily digest** — an unprompted morning message: where your portfolio stands, what your rules did overnight, and one observation worth acting on.
+- **Portfolio concentration guardrail** — before any trade that would meaningfully change your holdings, the agent checks whether the result would leave you too concentrated in one asset, and refuses without explicit confirmation. That is on top of the on-chain caps: a portfolio-level judgement, not a per-trade limit.
+- **Copy-trading** — "follow 0xabc..." watches that wallet's swaps and mirrors its buys into your vault, sized to the amount you chose rather than theirs. Detection reads ERC20 transfer logs, so it works whichever DEX they used.
+- **Voice-note trading** — send a voice message instead of typing. It runs through the same intent pipeline, and because speech-to-text mishears tickers, anything that would move funds is read back for confirmation first.
+- **Uniswap v4 pool reads** — the agent can read a pool's live price, tick and liquidity straight from X Layer's v4 contracts as a second opinion on the router's quote. Read-only.
 
 ## Stack
 
@@ -61,7 +61,7 @@ What they could still do is fill orders badly. `minAmountOut` is an *agent-suppl
 - `TradeVault.sol` — per-user vault: owner controls (`setAgent`, `setRouter`, `setSpender`, `setTokenIn`/`setTokenOut` with per-trade/per-day caps, `setMinOutRate`, `withdraw`), agent can only call `executeTrade` within those bounds.
 - 19 contract tests (55 in total across the suite) covering ownership, agent revocation, cap enforcement (per-trade, rolling per-day), tokenIn/tokenOut allowlisting, slippage protection, router-call failure handling, and the spender-not-set guard. Verified end-to-end (not just unit tests) against a live local Hardhat node: deploy → user creates their own vault → owner configures it → agent executes a trade → balances update correctly.
 
-## OKX DEX integration — verified against the live docs (2026-08-18)
+## OKX DEX integration
 
 - Endpoint is `/api/v6/dex/aggregator/swap` (not v5), response is array-wrapped (`data[0].routerResult`, `data[0].tx`).
 - `tx.to` (the router) and `signatureData[0].approveContract` (the spender) are genuinely different addresses — confirmed the router-vs-spender split above wasn't over-engineering.
@@ -110,7 +110,7 @@ Before trading real funds, fill in the mainnet entries in `config/tokens.json` w
 
 Setup is the only time you sign. After that the agent trades within your caps without prompting you again.
 
-## Setup
+## Running it locally
 
 ```bash
 npm install
