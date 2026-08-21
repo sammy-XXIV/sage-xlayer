@@ -244,7 +244,7 @@
       <h2>5. Deposit</h2>
       <div class="row">
         <div class="field"><label>Token address</label><input id="depositToken" placeholder="0x..." /></div>
-        <div class="field"><label>Amount (raw units)</label><input id="depositAmount" placeholder="e.g. 50000000000000000000" /></div>
+        <div class="field"><label>Amount</label><input id="depositAmount" placeholder="e.g. 50" /></div>
       </div>
       <button id="depositBtn">Approve &amp; Deposit</button>
       <div id="depositStatus" class="status hidden"></div>
@@ -254,10 +254,14 @@
       <h2>6. Withdraw (owner only, anytime)</h2>
       <div class="row">
         <div class="field"><label>Token address</label><input id="withdrawToken" placeholder="0x..." /></div>
-        <div class="field"><label>Amount (raw units)</label><input id="withdrawAmount" placeholder="0x..." /></div>
-        <div class="field"><label>Send to</label><input id="withdrawTo" placeholder="0x..." /></div>
+        <div class="field"><label>Amount</label><input id="withdrawAmount" placeholder="e.g. 50" /></div>
+        <div class="field"><label>Send to</label><input id="withdrawTo" placeholder="defaults to your wallet" /></div>
       </div>
-      <button id="withdrawBtn" class="secondary">Withdraw</button>
+      <div class="row">
+        <button id="withdrawBtn" class="secondary">Withdraw</button>
+        <button id="withdrawAllBtn" class="secondary">Withdraw everything</button>
+      </div>
+      <div class="hint">Only you can withdraw. The agent has no function that moves funds out of the vault.</div>
       <div id="withdrawStatus" class="status hidden"></div>
     </div>
 
@@ -350,7 +354,18 @@ const VAULT_ABI = [
   "function depositToken(address token, uint256 amount) external",
   "function withdraw(address token, uint256 amount, address to) external",
 ];
-const ERC20_BALANCE_ABI = ["function balanceOf(address) view returns (uint256)"];
+const ERC20_BALANCE_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+];
+
+// Convert a human amount ("50") into the token's own smallest unit. Asking the
+// user for raw units invites an off-by-three-zeros mistake on a real withdrawal.
+async function toRaw(humanAmount, tokenAddress) {
+  const token = new ethers.Contract(tokenAddress, ERC20_BALANCE_ABI, provider);
+  const decimals = await token.decimals();
+  return ethers.parseUnits(String(humanAmount).trim(), decimals);
+}
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
 ];
@@ -587,12 +602,13 @@ $("depositBtn").addEventListener("click", async () => {
   try {
     const token = new ethers.Contract($("depositToken").value, ERC20_ABI, signer);
     txStatus($("depositStatus"), "Approving");
-    const approveTx = await token.approve(vaultAddress, $("depositAmount").value);
+    const rawAmount = await toRaw($("depositAmount").value, $("depositToken").value);
+    const approveTx = await token.approve(vaultAddress, rawAmount);
     await approveTx.wait();
 
     txStatus($("depositStatus"), "Depositing");
     const vault = vaultWithSigner();
-    const depositTx = await vault.depositToken($("depositToken").value, $("depositAmount").value);
+    const depositTx = await vault.depositToken($("depositToken").value, rawAmount);
     showStatus($("depositStatus"), "Confirming... tx: " + depositTx.hash, true);
     await depositTx.wait();
     showStatus($("depositStatus"), "Deposit done.", true);
@@ -601,10 +617,31 @@ $("depositBtn").addEventListener("click", async () => {
   }
 });
 
+async function withdraw(amountRawPromise, label) {
+  try {
+    const token = $("withdrawToken").value;
+    if (!token) return showStatus($("withdrawStatus"), "Enter the token address to withdraw.", false);
+    const raw = await amountRawPromise(token);
+    if (raw === 0n) return showStatus($("withdrawStatus"), "Nothing of that token in the vault.", false);
+    await runVaultCall(
+      () => vaultWithSigner().withdraw(token, raw, $("withdrawTo").value || userAddress),
+      $("withdrawStatus"),
+      label
+    );
+  } catch (e) {
+    showStatus($("withdrawStatus"), e.shortMessage || e.message, false);
+  }
+}
+
 $("withdrawBtn").addEventListener("click", () =>
-  runVaultCall(
-    () => vaultWithSigner().withdraw($("withdrawToken").value, $("withdrawAmount").value, $("withdrawTo").value || userAddress),
-    $("withdrawStatus"), "Withdraw"
+  withdraw((token) => toRaw($("withdrawAmount").value, token), "Withdraw"));
+
+// Exit in one click — you should never have to compute your own balance in raw
+// units just to get all of your money back out.
+$("withdrawAllBtn").addEventListener("click", () =>
+  withdraw(
+    (token) => new ethers.Contract(token, ERC20_BALANCE_ABI, provider).balanceOf(vaultAddress),
+    "Withdraw everything"
   ));
 
 // Must match bot/tools/linkAuth.js byte for byte — any difference in
