@@ -10,7 +10,7 @@ Everything you need to copy-paste. Deadline: **Aug 21, 2026, 23:59 UTC**.
 |---|---|
 | Telegram bot | https://t.me/sagedefibot |
 | Repo | https://github.com/sammy-XXIV/sage-xlayer |
-| Vault setup page | `web/setup.html` (needs hosting — see "Loose ends") |
+| Vault setup page | https://sammy-xxiv.github.io/sage-xlayer/web/setup.html |
 | Submission form | https://docs.google.com/forms/d/e/1FAIpQLSfgU_3zcXdxK0GJQxj33QeUWdEcAaYnieVe9p5cFDb2JFQa4Q/viewform |
 
 ## On-chain (X Layer Testnet, chain 1952)
@@ -101,6 +101,5 @@ If you want a sixth beat and have time: send a voice note instead of typing.
 ## Loose ends before you submit
 
 - [ ] Create the dedicated X account and post (hard requirement)
-- [ ] Host `web/setup.html` so judges can click it — GitHub Pages on this repo is the fastest option
 - [ ] Record the demo
 - [ ] Submit the form
