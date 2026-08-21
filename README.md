@@ -2,13 +2,19 @@
 
 Self-custodial conversational trading agent on X Layer — built for the [BuildX AI Season Hackathon](https://web3.okx.com/xlayer/build-x-series) (submissions close Aug 21, 2026, 23:59 UTC).
 
+| | |
+|---|---|
+| Bot | [@sagedefibot](https://t.me/sagedefibot) |
+| Vault setup | [sammy-xxiv.github.io/sage-xlayer](https://sammy-xxiv.github.io/sage-xlayer/web/setup.html) |
+| Factory (X Layer testnet) | [`0x88f54c22D4E96AE58A32509e99a3db24c1c1D6aE`](https://web3.okx.com/explorer/x-layer-testnet/address/0x88f54c22D4E96AE58A32509e99a3db24c1c1D6aE) |
+
 ## What it is
 
 You talk to a Telegram bot in plain language — "buy $50 of ETH", "DCA $20 into ETH daily", "follow this wallet". The bot parses intent with Claude and executes on X Layer through whichever DEX router you configure. It never holds your funds, and rules keep running when you're not there.
 
 ## Custody model
 
-- Your own wallet deploys and owns your `TradeVault` — there is no custodial phase, ever. You run `npm run create-vault:testnet` yourself, with your own key.
+- Your own wallet deploys and owns your `TradeVault` — there is no custodial phase, ever. You create it from the setup page, signing with your own key; the bot is never in that loop.
 - You then grant the bot's signer a session-key role via `vault.setAgent(...)`. That key can only call `executeTrade`, only through the router/spender you set, only on tokens you've allowlisted, and only within per-trade / per-day caps you set — all enforced on-chain, not by the bot.
 - The session key has no path to `withdraw` or touch the allowlists. You can revoke it (`setAgent(0x0)`) at any time.
 - **Router vs. spender**: DEX aggregators (OKX included) use two different addresses — `router` is who the swap transaction is sent to, `spender` is who actually holds the ERC20 allowance and pulls funds. They're commonly different contracts. The vault tracks both separately (`setRouter` / `setSpender`) — approving the wrong one just means the swap fails to pull funds, so this distinction is load-bearing, not cosmetic.
@@ -36,9 +42,7 @@ What they could still do is fill orders badly. `minAmountOut` is an *agent-suppl
 - **Portfolio concentration guardrail** — before any trade that would meaningfully change your holdings, the agent checks whether the result would over-concentrate the vault in one asset (`bot/tools/portfolioRisk.js`, default cap 60%, `MAX_CONCENTRATION_PERCENT`). This is on top of the on-chain per-trade/per-day caps — a portfolio-level check, not just a single-trade one.
 - **Copy-trading** — "follow 0xabc..." creates a rule that watches a wallet's swaps (via ERC20 Transfer-log inference, so it works regardless of which router they used) and mirrors their buys into your vault, sized to your own chosen amount, not theirs (`bot/tools/copyTrading.js`).
 - **Voice-note trading** — send a Telegram voice message; it's transcribed (OpenAI Whisper, needs `OPENAI_API_KEY`) and fed through the same intent pipeline as text.
-- **Uniswap v4 pool reads** — `get_v4_pool_info` reads a pool's live price/tick/liquidity directly from X Layer's verified v4 `StateView` contract, as a second price source alongside the OKX aggregator quote. Read-only — no swap execution added here.
-
-Inspiration note: copy-trading and the concentration guardrail are informed by real winners from **past** X Layer "Build X" hackathons (not the current one) — Billion Live (X Cup 1st place, live-trade copying) and the "governed-trading" framing from PolyDesk (OKX.AI Genesis Finance Copilot winner).
+- **Uniswap v4 pool reads** — `get_v4_pool_info` reads a pool's live price/tick/liquidity directly from X Layer's verified v4 `StateView` contract, as a second price source alongside the router quote. Read-only — no swap execution added here.
 
 ## Stack
 
@@ -63,9 +67,8 @@ Inspiration note: copy-trading and the concentration guardrail are informed by r
 - `tx.to` (the router) and `signatureData[0].approveContract` (the spender) are genuinely different addresses — confirmed the router-vs-spender split above wasn't over-engineering.
 - OKX's own docs warn both addresses **can change with contract upgrades** and recommend always using the live API response rather than a hardcoded value. `bot/tools/vaultChain.js::executeTrade` checks the vault's on-chain `router`/`spender` against what OKX's live response just returned before submitting, and fails loudly (asking the owner to re-run `setRouter`/`setSpender`) rather than risking a stale call.
 - Static reference addresses for X Layer from the docs table (cross-check, don't hardcode): DEX router `0x7c5bee2a8091c3ef39072f64f18fac913060aeaf`, token approval contract `0x8b773D83bc66Be128c60e07E17C8901f7a64F000`.
-- **OKX routing is optional, not a hackathon requirement.** The participation rules require AI + a testnet deploy (then a mainnet launch afterwards); the OKX DEX only appears in the separate Launch Grant, whose FAQ explicitly excludes volume executed via the OKX DEX *API*. The vault takes any router address, so Uniswap V3 on X Layer mainnet (Factory `0x4B2ab38DBF28D31D467aA8993f6c2585981D6804`, SwapRouter02 `0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca` — both verified to have bytecode on chain 196) works with no code change.
+- **The vault is not tied to OKX.** `setRouter`/`setSpender` take any address, so Uniswap V3 on X Layer mainnet (Factory `0x4B2ab38DBF28D31D467aA8993f6c2585981D6804`, SwapRouter02 `0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca` — both verified to have bytecode on chain 196) works with no code change.
 - **The aggregator's supported-chains table only lists "X Layer" (mainnet, chainIndex assumed `196`) — no separate testnet entry.** Testnets generally don't have real liquidity for an aggregator to route through, so `get_quote`/`execute_trade` are expected to work on mainnet only; `bot/tools/okxDex.js` will throw a clear error if called with `CHAIN_ID=1952`. For a testnet demo, use `contracts/test-helpers/MockRouter.sol` instead — see the integration pattern in `test/TradeVault.test.js`.
-- The `196` chainIndex assumption (matching X Layer's real EVM chain ID, same pattern as Ethereum's chainIndex `1`) is not independently confirmed against a live authenticated API call — verify with real OKX API credentials before trusting it.
 
 ## What testing caught
 
@@ -84,18 +87,28 @@ Each of these was a live defect that a happy-path demo would not have surfaced, 
 
 Also hardened: `node-cron` ticks no longer overlap, the agent tool loop is capped at 10 iterations, per-chat messages are serialised, store writes are atomic (temp file + rename), `eth_getLogs` is chunked to 100 blocks (X Layer's RPC rejects anything wider), and multi-hop swaps with ambiguous endpoints are skipped rather than guessed at.
 
-## Known gaps / TODO before real funds touch this
+## Testnet vs mainnet
 
-- **`config/tokens.json` is populated for testnet only.** `npm run setup-demo:testnet` writes the demo token addresses automatically. Mainnet entries are still blank and must be filled with verified addresses — do not guess.
-- **Token safety is mainnet-only.** GoPlus is confirmed working on X Layer mainnet (196) — verified against a live token, which came back flagged as an upgradeable proxy. On testnet it returns `supported: false`, which callers must treat as "unknown," never "safe."
-- Real OKX-routed trades only work once you're pointed at mainnet (`CHAIN_ID=196`) with funded API credentials — see the OKX integration note above.
-- **Copy-trading's initial lookback is ~1000 blocks** on first evaluation of a new rule. A mirror that fails is skipped rather than retried (deliberate: a missed copy is recoverable, a double-spend isn't), and dedup retains the newest 500 tx hashes per rule.
-- **The JSON fallback backend is single-process only.** Its mutations are read-modify-write over one file, so more than one replica will lose writes. The Supabase backend has no such limit.
-- **Uniswap v4 pool reads are mainnet-only** (`get_v4_pool_info` throws on testnet) since the verified addresses are for chain 196.
+X Layer testnet has no DEX — no Uniswap at any canonical address, and OKX's aggregator serves mainnet only. So the testnet deployment ships its own router with seeded liquidity (`npm run setup-demo:testnet`). Everything else is the real thing: the same vault, caps, allowlists, agent key and on-chain transactions.
 
-## Non-custodial vault setup
+Three features are consequently mainnet-only, and say so rather than guessing:
 
-`web/setup.html` is a self-contained page (open directly, or host anywhere) for creating and configuring a vault entirely from your own wallet — connect, create vault, set router/spender, allowlist tokens, deposit, and get the `/link` command to paste into Telegram. No server involved in any of it.
+- **Token safety checks** — GoPlus has no testnet data. On 1952 it returns `supported: false`, which callers treat as "unknown", never "safe".
+- **OKX-routed trades** — need `CHAIN_ID=196` and API credentials.
+- **Uniswap v4 pool reads** — the verified `StateView` addresses are mainnet.
+
+Before trading real funds, fill in the mainnet entries in `config/tokens.json` with verified token addresses.
+
+## Design notes
+
+- **Copy-trading looks back ~1000 blocks** when a rule is first evaluated. A mirror that fails is skipped rather than retried — a missed copy is recoverable, a double-spend isn't — and dedup keeps the newest 500 tx hashes per rule.
+- **The JSON store is single-process.** Its mutations are read-modify-write over one file, so multiple replicas would lose writes. Supabase has no such limit and is what runs in production.
+
+## Creating a vault
+
+[The setup page](https://sammy-xxiv.github.io/sage-xlayer/web/setup.html) does it entirely from your own wallet: create the vault, set router and spender, allowlist tokens with caps, set a worst-acceptable rate, deposit, and sign the `/link` proof for Telegram. It shows how many steps remain, reading real on-chain state rather than tracking which buttons you pressed. No server is involved in any of it.
+
+Setup is the only time you sign. After that the agent trades within your caps without prompting you again.
 
 ## Setup
 
@@ -104,8 +117,8 @@ npm install
 cp .env.example .env   # fill in keys
 npm run compile
 npm test                        # 55 tests — run before touching a real network
-npm run deploy:testnet          # deploys TradeVaultFactory, writes deployment.json
-npm run create-vault:testnet    # YOU create your own vault, with your own key
+npm run setup-demo:testnet      # factory + demo router + tokens + a configured vault
+npm run demo-trade:testnet      # fires one trade through the agent session key
 npm run bot
 ```
 
