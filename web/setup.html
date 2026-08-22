@@ -56,7 +56,7 @@
   .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .row:last-child { margin-bottom: 0; }
   label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
-  input {
+  input, select {
     background: #000;
     border: 2px solid var(--border);
     color: var(--text);
@@ -67,7 +67,7 @@
     flex: 1;
     min-width: 120px;
   }
-  input:focus { outline: none; border-color: var(--border-active); }
+  input:focus, select:focus { outline: none; border-color: var(--border-active); }
   button {
     background: var(--accent);
     color: #000;
@@ -209,44 +209,24 @@
     </div>
 
     <div id="allowlistCard" class="card hidden">
-      <h2>4. Allowlist a Spend Token (tokenIn)</h2>
-      <div class="row">
-        <div class="field"><label>Token address</label><input id="tokenInAddr" placeholder="0x..." /></div>
-        <div class="field"><label>Per-trade cap (raw units)</label><input id="perTradeCap" placeholder="e.g. 100000000000000000000" /></div>
-        <div class="field"><label>Per-day cap (raw units)</label><input id="perDayCap" placeholder="e.g. 500000000000000000000" /></div>
-      </div>
-      <button id="setTokenInBtn">Allow Token as Spend Source</button>
+      <h2>4. Set Your Spending Limits</h2>
+      <p class="hint" style="margin-top:0">
+        SAGE trades the tokens it knows about. You decide how much of each it may ever spend —
+        these caps are enforced by the vault contract, not by the bot.
+      </p>
+      <div class="hint" id="capsNote" style="margin-bottom:12px"></div>
+      <button id="setTokenInBtn">Enable Trading</button>
       <div id="tokenInStatus" class="status hidden"></div>
-
-      <h2 style="margin-top:20px">Allowlist a Receive Token (tokenOut)</h2>
-      <div class="row">
-        <div class="field"><label>Token address</label><input id="tokenOutAddr" placeholder="0x..." /></div>
-      </div>
-      <button id="setTokenOutBtn">Allow Token as Receive Target</button>
       <div id="tokenOutStatus" class="status hidden"></div>
-
-      <h2 style="margin-top:20px">Worst Acceptable Rate (optional, recommended)</h2>
-      <div class="row">
-        <div class="field"><label>Spend token (tokenIn)</label><input id="rateTokenIn" placeholder="0x..." /></div>
-        <div class="field"><label>Receive token (tokenOut)</label><input id="rateTokenOut" placeholder="0x..." /></div>
-        <div class="field"><label>Min out per 1e18 in (raw)</label><input id="minOutRate" placeholder="e.g. 900000000000000000" /></div>
-      </div>
-      <button id="setMinOutRateBtn" class="secondary">Set Rate Floor</button>
-      <div class="hint" style="margin-top:8px">
-        The agent supplies its own slippage number on each trade, so that number cannot protect you if the
-        agent key is ever compromised. This floor is set by you and checked on-chain independently — it caps
-        how badly a rogue agent could ever fill an order. Leave unset (0) to disable.
-      </div>
-      <div id="minOutRateStatus" class="status hidden"></div>
     </div>
 
     <div id="depositCard" class="card hidden">
       <h2>5. Deposit</h2>
       <div class="row">
-        <div class="field"><label>Token address</label><input id="depositToken" placeholder="0x..." /></div>
-        <div class="field"><label>Amount</label><input id="depositAmount" placeholder="e.g. 50" /></div>
+        <div class="field"><label>Token</label><select id="depositToken"></select></div>
       </div>
-      <button id="depositBtn">Approve &amp; Deposit</button>
+      <div class="hint" id="depositBalance" style="margin:10px 0"></div>
+      <button id="depositBtn">Deposit</button>
       <div id="depositStatus" class="status hidden"></div>
     </div>
 
@@ -275,9 +255,9 @@
     <div id="withdrawCard" class="card hidden">
       <h2>Withdraw — anytime, owner only</h2>
       <div class="row">
-        <div class="field"><label>Token address</label><input id="withdrawToken" placeholder="0x..." /></div>
+        <div class="field"><label>Token</label><select id="withdrawToken"></select></div>
         <div class="field"><label>Amount</label><input id="withdrawAmount" placeholder="e.g. 50" /></div>
-        <div class="field"><label>Send to</label><input id="withdrawTo" placeholder="defaults to your wallet" /></div>
+        <div class="field"><label>Send to</label><input id="withdrawTo" /></div>
       </div>
       <div class="row">
         <button id="withdrawBtn" class="secondary">Withdraw</button>
@@ -312,7 +292,15 @@ const NETWORKS = {
     defaultSpender: "0x6D737a419eB66B20f1E0D60ADf20116D40e9435E",
     routerNote:
       "Testnet: X Layer testnet has no DEX, so these point at the demo router deployed with this project. Everything else — vault, caps, allowlists, agent key — is real.",
-    knownTokens: {"USDT": "0x868723385990CF2E106B85d39a91C1B98B1DCc7b", "WETH": "0x9C5F42550661767608b8A3367071D0E750593963"},
+    // Must stay in step with config/tokens.json. USDT/USDC/USDG are the tokens
+    // the official X Layer faucet dispenses, so anyone can claim and trade;
+    // WETH is ours because the demo router needs mintable inventory to fill from.
+    knownTokens: {
+      USDT: "0x9e29b3AaDa05Bf2D2c827Af80Bd28Dc0b9b4FB0c",
+      USDC: "0xcB8BF24c6cE16Ad21D707c9505421a17f2bec79D",
+      USDG: "0xA78E2baaBaf5c4f36b7Fc394725Deb68D332EeC1",
+      WETH: "0x9C5F42550661767608b8A3367071D0E750593963",
+    },
   },
   196: {
     chainIdHex: "0xc4",
@@ -328,6 +316,11 @@ const NETWORKS = {
       "Prefilled from OKX's docs (2026-08-18). OKX warns these can rotate on contract upgrades — confirm against a live /swap response before funding.",
   },
 };
+
+// Spending caps, in whole tokens. These are applied for you rather than typed
+// in: the point of the vault is that a limit exists and is enforced on-chain,
+// not that every user invents their own number. Change them here, not in the UI.
+const DEFAULT_CAPS = { perTrade: "5", perDay: "20" };
 
 // Switch this to 196 once the factory is deployed to mainnet.
 const ACTIVE_CHAIN_ID = 1952;
@@ -442,7 +435,71 @@ async function connect() {
   $("spenderInput").value = CONFIG.defaultSpender;
   if (CONFIG.routerNote) $("routerNote").textContent = CONFIG.routerNote;
 
+  // Which tokens exist on this chain is our knowledge, not the user's — they
+  // pick by symbol and never see, let alone type, a contract address.
+  fillTokenSelects();
+  // Your own wallet is the only address you withdraw to in practice, so it is
+  // the default rather than an empty box you have to fill in every time.
+  $("withdrawTo").value = userAddress;
+  $("depositToken").addEventListener("change", showDepositBalance);
+  await showDepositBalance();
+
   await refreshVault();
+}
+
+// The token SAGE is allowed to spend is not a user choice — it is the first
+// entry in the list we ship, which is the faucet stablecoin everything else is
+// priced against.
+function spendToken() {
+  const entries = Object.entries(CONFIG.knownTokens || {});
+  if (!entries.length) throw new Error("No tokens configured for this network.");
+  return { symbol: entries[0][0], address: entries[0][1] };
+}
+
+function fillTokenSelects() {
+  const entries = Object.entries(CONFIG.knownTokens || {});
+  const options = entries.map(([symbol, address]) => `<option value="${address}">${symbol}</option>`).join("");
+  ["depositToken", "withdrawToken"].forEach((id) => {
+    $(id).innerHTML = options;
+  });
+
+  const spendSymbol = entries[0][0];
+  const others = entries.slice(1).map(([s]) => s).join(", ");
+  $("capsNote").textContent =
+    `SAGE will be allowed to spend up to ${DEFAULT_CAPS.perTrade} ${spendSymbol} per trade and ` +
+    `${DEFAULT_CAPS.perDay} ${spendSymbol} per day, into ${others}. The vault contract enforces ` +
+    `these limits — the bot cannot exceed them even if its key is stolen.`;
+}
+
+function symbolFor(address) {
+  const hit = Object.entries(CONFIG.knownTokens || {}).find(
+    ([, a]) => a.toLowerCase() === String(address).toLowerCase()
+  );
+  return hit ? hit[0] : "tokens";
+}
+
+async function walletBalance(tokenAddress) {
+  const token = new ethers.Contract(tokenAddress, ERC20_BALANCE_ABI, provider);
+  return token.balanceOf(userAddress);
+}
+
+// The deposit button moves everything, so the amount has to be visible before
+// you press it rather than only in the wallet popup.
+async function showDepositBalance() {
+  const el = $("depositBalance");
+  const tokenAddress = $("depositToken").value;
+  try {
+    const token = new ethers.Contract(tokenAddress, ERC20_BALANCE_ABI, provider);
+    const [raw, decimals] = await Promise.all([token.balanceOf(userAddress), token.decimals()]);
+    const human = ethers.formatUnits(raw, decimals);
+    const symbol = symbolFor(tokenAddress);
+    el.textContent =
+      raw === 0n
+        ? `Your wallet holds no ${symbol}.`
+        : `Deposits your full balance: ${human} ${symbol}. You can withdraw it at any time.`;
+  } catch {
+    el.textContent = "";
+  }
 }
 
 // Reads real vault state rather than tracking which buttons were clicked, so
@@ -581,37 +638,69 @@ $("setRouterBtn").addEventListener("click", () =>
 $("setSpenderBtn").addEventListener("click", () =>
   runVaultCall(() => vaultWithSigner().setSpender($("spenderInput").value), $("configStatus"), "Set spender"));
 
-$("setTokenInBtn").addEventListener("click", () =>
-  runVaultCall(
-    () => vaultWithSigner().setTokenIn($("tokenInAddr").value, true, $("perTradeCap").value, $("perDayCap").value),
-    $("tokenInStatus"), "Allowlist tokenIn"
-  ));
-$("setMinOutRateBtn").addEventListener("click", () =>
-  runVaultCall(
-    () => vaultWithSigner().setMinOutRate($("rateTokenIn").value, $("rateTokenOut").value, $("minOutRate").value),
-    $("minOutRateStatus"), "Set rate floor"
-  ));
+// One button does the whole allowlist: the chosen token becomes spendable under
+// your caps, and every other token we know about becomes a valid destination.
+// The vault has no batch setter, so these are separate signatures — the status
+// line counts them off rather than leaving you guessing how many are left.
+$("setTokenInBtn").addEventListener("click", async () => {
+  const status = $("tokenInStatus");
+  try {
+    const { address: spend } = spendToken();
+    // Caps are raw units on-chain, so they must be scaled by this token's own
+    // decimals. Reusing an 18-decimal figure against 6-decimal USDT would set a
+    // cap a trillion times larger than the number on screen.
+    const [perTrade, perDay] = await Promise.all([
+      toRaw(DEFAULT_CAPS.perTrade, spend),
+      toRaw(DEFAULT_CAPS.perDay, spend),
+    ]);
+    if (perTrade === 0n || perDay === 0n) {
+      return showStatus(status, "Both caps must be greater than zero.", false);
+    }
 
-$("setTokenOutBtn").addEventListener("click", () =>
-  runVaultCall(
-    () => vaultWithSigner().setTokenOut($("tokenOutAddr").value, true),
-    $("tokenOutStatus"), "Allowlist tokenOut"
-  ));
+    const receiveTokens = Object.values(CONFIG.knownTokens).filter(
+      (a) => a.toLowerCase() !== spend.toLowerCase()
+    );
+    const total = 1 + receiveTokens.length;
 
+    txStatus(status, `Setting spend limits (1 of ${total})`);
+    await (await vaultWithSigner().setTokenIn(spend, true, perTrade, perDay)).wait();
+
+    for (let i = 0; i < receiveTokens.length; i++) {
+      txStatus(status, `Enabling a destination token (${i + 2} of ${total})`);
+      await (await vaultWithSigner().setTokenOut(receiveTokens[i], true)).wait();
+    }
+
+    showStatus(status, "Limits set. SAGE can trade within them and no further.", true);
+    await refreshVault();
+  } catch (e) {
+    showStatus(status, e.shortMessage || e.message, false);
+  }
+});
+
+// Deposits your whole balance of the chosen token. You can withdraw any part of
+// it at any time, so asking you to pick a number up front only adds a step and a
+// chance to fat-finger the decimals.
 $("depositBtn").addEventListener("click", async () => {
   try {
-    const token = new ethers.Contract($("depositToken").value, ERC20_ABI, signer);
+    const tokenAddress = $("depositToken").value;
+    const rawAmount = await walletBalance(tokenAddress);
+    if (rawAmount === 0n) {
+      return showStatus($("depositStatus"), "Your wallet holds none of that token.", false);
+    }
+
+    const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
     txStatus($("depositStatus"), "Approving");
-    const rawAmount = await toRaw($("depositAmount").value, $("depositToken").value);
     const approveTx = await token.approve(vaultAddress, rawAmount);
     await approveTx.wait();
 
     txStatus($("depositStatus"), "Depositing");
     const vault = vaultWithSigner();
-    const depositTx = await vault.depositToken($("depositToken").value, rawAmount);
+    const depositTx = await vault.depositToken(tokenAddress, rawAmount);
     showStatus($("depositStatus"), "Confirming... tx: " + depositTx.hash, true);
     await depositTx.wait();
     showStatus($("depositStatus"), "Deposit done.", true);
+    await showDepositBalance();
+    await refreshVault();
   } catch (e) {
     showStatus($("depositStatus"), e.shortMessage || e.message, false);
   }
@@ -620,7 +709,7 @@ $("depositBtn").addEventListener("click", async () => {
 async function withdraw(amountRawPromise, label) {
   try {
     const token = $("withdrawToken").value;
-    if (!token) return showStatus($("withdrawStatus"), "Enter the token address to withdraw.", false);
+    if (!token) return showStatus($("withdrawStatus"), "Pick a token to withdraw.", false);
     const raw = await amountRawPromise(token);
     if (raw === 0n) return showStatus($("withdrawStatus"), "Nothing of that token in the vault.", false);
     await runVaultCall(
