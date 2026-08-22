@@ -122,7 +122,17 @@
     padding: 10px 12px;
     font-size: 14px;
   }
-  .copybox code { border: none; background: none; padding: 0; flex: 1; }
+  /* The signature is one unbroken 132-character hex string. Without
+     min-width:0 a flex child refuses to shrink below its content, so the box
+     overflowed sideways and pushed the Copy button off the edge. */
+  .copybox code {
+    border: none;
+    background: none;
+    padding: 0;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
   .checklist { list-style: none; padding: 0; margin: 0 0 12px; }
   .checklist li {
     display: flex;
