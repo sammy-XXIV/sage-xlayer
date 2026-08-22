@@ -4,23 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
 const tokenMeta = require("./tokenMeta");
+const abi = require("./abi");
 
-const ARTIFACT_PATH = path.join(
-  __dirname,
-  "..",
-  "..",
-  "artifacts",
-  "contracts",
-  "TradeVault.sol",
-  "TradeVault.json"
-);
 const DEPLOYMENT_PATH = path.join(__dirname, "..", "..", "deployment.json");
 
 function loadAbi() {
-  if (!fs.existsSync(ARTIFACT_PATH)) {
-    throw new Error("TradeVault artifact not found — run `npm run compile` first.");
-  }
-  return JSON.parse(fs.readFileSync(ARTIFACT_PATH, "utf8")).abi;
+  return abi.load("TradeVault");
 }
 
 function loadDeployment() {

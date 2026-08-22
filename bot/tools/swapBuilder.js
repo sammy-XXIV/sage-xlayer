@@ -16,6 +16,8 @@ const path = require("path");
 const { ethers } = require("ethers");
 const okxDex = require("./okxDex");
 const tokenMeta = require("./tokenMeta");
+const uniswapV3 = require("./uniswapV3");
+const abiLoader = require("./abi");
 
 function providerFor(chainId) {
   const rpc =
@@ -26,16 +28,6 @@ function providerFor(chainId) {
 }
 
 const DEPLOYMENT_PATH = path.join(__dirname, "..", "..", "deployment.json");
-const MOCK_ROUTER_ARTIFACT = path.join(
-  __dirname,
-  "..",
-  "..",
-  "artifacts",
-  "contracts",
-  "test-helpers",
-  "MockRouter.sol",
-  "MockRouter.json"
-);
 
 // MockRouter computes amountOut = amountIn * rate / 1e18, entirely in raw
 // units. A flat 1e18 therefore only means "1:1" when both tokens share the
@@ -55,11 +47,7 @@ function demoConfigFor(chainId) {
 }
 
 async function buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent, chainId }) {
-  if (!fs.existsSync(MOCK_ROUTER_ARTIFACT)) {
-    throw new Error("MockRouter artifact missing — run `npm run compile`.");
-  }
-  const abi = JSON.parse(fs.readFileSync(MOCK_ROUTER_ARTIFACT, "utf8")).abi;
-  const iface = new ethers.Interface(abi);
+  const iface = new ethers.Interface(abiLoader.load("MockRouter"));
 
   const provider = providerFor(chainId);
   const [decIn, decOut] = await Promise.all([
@@ -91,15 +79,32 @@ async function buildSwap({ chainId, fromTokenAddress, toTokenAddress, amount, sl
     return buildDemoSwap({ demo, fromTokenAddress, toTokenAddress, amount, slippagePercent, chainId });
   }
 
-  const swap = await okxDex.buildSwap({
+  // Uniswap V3 by direct contract call is the default on mainnet: no API key,
+  // no aggregator availability to depend on, and the router was verified
+  // against the same factory that owns the liquid pools. The OKX aggregator
+  // stays available for anyone who has credentials and wants its routing.
+  if (okxDex.isConfigured()) {
+    const swap = await okxDex.buildSwap({
+      chainId,
+      fromTokenAddress,
+      toTokenAddress,
+      amount,
+      slippagePercent,
+      userWalletAddress,
+    });
+    return { ...swap, source: "okx-aggregator" };
+  }
+
+  const swap = await uniswapV3.buildSwap({
+    provider: providerFor(chainId),
     chainId,
     fromTokenAddress,
     toTokenAddress,
     amount,
     slippagePercent,
-    userWalletAddress,
+    recipient: userWalletAddress,
   });
-  return { ...swap, source: "okx-aggregator" };
+  return { ...swap, source: "uniswap-v3" };
 }
 
 /// Price of one whole fromToken in toToken units. The demo router is a fixed
@@ -121,8 +126,24 @@ async function getQuote({ chainId, fromTokenAddress, toTokenAddress, amount }) {
       note: "Fixed 1:1 demo router — X Layer testnet has no DEX to quote against.",
     };
   }
-  const quote = await okxDex.getQuote({ chainId, fromTokenAddress, toTokenAddress, amount });
-  return { ...quote, source: "okx-aggregator" };
+  if (okxDex.isConfigured()) {
+    const quote = await okxDex.getQuote({ chainId, fromTokenAddress, toTokenAddress, amount });
+    return { ...quote, source: "okx-aggregator" };
+  }
+
+  const { amountOut, pool } = await uniswapV3.quote({
+    provider: providerFor(chainId),
+    chainId,
+    fromTokenAddress,
+    toTokenAddress,
+    amount,
+  });
+  return {
+    fromTokenAmount: BigInt(amount).toString(),
+    toTokenAmount: amountOut.toString(),
+    source: "uniswap-v3",
+    poolFee: pool.fee,
+  };
 }
 
 function isDemoMode(chainId) {

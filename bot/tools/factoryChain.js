@@ -1,29 +1,20 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const abi = require("./abi");
 
-const ARTIFACT_PATH = path.join(
-  __dirname,
-  "..",
-  "..",
-  "artifacts",
-  "contracts",
-  "TradeVaultFactory.sol",
-  "TradeVaultFactory.json"
-);
 const DEPLOYMENT_PATH = path.join(__dirname, "..", "..", "deployment.json");
 const NETWORK_NAME = process.env.NETWORK_NAME || "xlayerTestnet";
 
 function loadFactory() {
-  if (!fs.existsSync(ARTIFACT_PATH)) throw new Error("TradeVaultFactory artifact not found — run `npm run compile` first.");
   if (!fs.existsSync(DEPLOYMENT_PATH)) throw new Error("deployment.json not found — deploy the factory first.");
 
-  const abi = JSON.parse(fs.readFileSync(ARTIFACT_PATH, "utf8")).abi;
+  const factoryAbi = abi.load("TradeVaultFactory");
   const deployment = JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf8"))[NETWORK_NAME];
   if (!deployment) throw new Error(`No factory deployment recorded for network ${NETWORK_NAME}.`);
 
   const provider = new ethers.JsonRpcProvider(process.env.XLAYER_TESTNET_RPC || "https://testrpc.xlayer.tech");
-  return new ethers.Contract(deployment.factory, abi, provider);
+  return new ethers.Contract(deployment.factory, factoryAbi, provider);
 }
 
 /// Confirms `ownerAddress` actually has a vault on-chain, and returns its address.
